@@ -1,0 +1,477 @@
+// Blissmark API schema on MongoDB (Atlas). Money is stored in paise (Int).
+// Ids are strings mapped to Mongo's _id; readable ids (BM…, SR…, CB…) are used where people see them.
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mongodb"
+  url      = env("DATABASE_URL")
+}
+
+enum Language {
+  en
+  hi
+}
+
+model User {
+  id            String         @id @default(cuid()) @map("_id")
+  phone         String         @unique
+  name          String?
+  photo         String?
+  city          String         @default("Jaipur")
+  language      Language       @default(en)
+  kycVerified   Boolean        @default(false)
+  coupon        String?
+  createdAt     DateTime       @default(now())
+  member        Member?
+  addresses     Address[]
+  cartItems     CartItem[]
+  orders        Order[]
+  bookings      Booking[]
+  notifications Notification[]
+  subscription  Subscription?
+  withdrawals   Withdrawal[]
+  rides         Ride[]
+  foodOrders    FoodOrder[]
+  sos           SosRequest[]
+  shortlist     Shortlist[]
+  enquiries     Enquiry[]
+}
+
+model Otp {
+  id        String   @id @map("_id") // the phone number
+  codeHash  String
+  attempts  Int      @default(0)
+  expiresAt DateTime
+}
+
+/// Referral member. Sponsor binding is immutable (Plan C).
+model Member {
+  id           String            @id @default(cuid()) @map("_id")
+  userId       String            @unique
+  user         User              @relation(fields: [userId], references: [id])
+  referralCode String            @unique
+  sponsorId    String?
+  sponsor      Member?           @relation("Sponsor", fields: [sponsorId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  downline     Member[]          @relation("Sponsor")
+  active       Boolean           @default(true)
+  joinedAt     DateTime          @default(now())
+  ancestors    ReferralClosure[] @relation("Descendant")
+  descendants  ReferralClosure[] @relation("Ancestor")
+}
+
+/// Closure table: one document per (ancestor, descendant) pair, depth 0..30.
+model ReferralClosure {
+  id           String @id @default(cuid()) @map("_id")
+  ancestorId   String
+  descendantId String
+  depth        Int
+  ancestor     Member @relation("Ancestor", fields: [ancestorId], references: [id])
+  descendant   Member @relation("Descendant", fields: [descendantId], references: [id])
+
+  @@unique([ancestorId, descendantId])
+  @@index([ancestorId, depth])
+  @@index([descendantId])
+}
+
+model Address {
+  id        String  @id @default(cuid()) @map("_id")
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  label     String
+  line1     String
+  city      String
+  pincode   String
+  lat       Float?
+  lng       Float?
+  isDefault Boolean @default(false)
+
+  @@index([userId])
+}
+
+model Seller {
+  id       String    @id @default(cuid()) @map("_id")
+  name     String
+  rating   Float
+  products Product[]
+}
+
+model Category {
+  id       String    @id @map("_id")
+  name     String
+  photo    String
+  sort     Int       @default(0)
+  products Product[]
+}
+
+model Product {
+  id          String     @id @default(cuid()) @map("_id")
+  title       String
+  brand       String?
+  description String
+  categoryId  String
+  category    Category   @relation(fields: [categoryId], references: [id])
+  sellerId    String
+  seller      Seller     @relation(fields: [sellerId], references: [id])
+  price       Int
+  mrp         Int
+  rating      Float
+  reviews     Int
+  photos      String[]
+  colours     Json       @default("[]")
+  stock       Int        @default(100)
+  trending    Boolean    @default(false)
+  cartItems   CartItem[]
+}
+
+model CartItem {
+  id        String  @id @default(cuid()) @map("_id")
+  userId    String
+  user      User    @relation(fields: [userId], references: [id])
+  productId String
+  product   Product @relation(fields: [productId], references: [id])
+  colour    String?
+  qty       Int     @default(1)
+
+  @@index([userId])
+}
+
+model Coupon {
+  code        String  @id @map("_id")
+  description String
+  percent     Int
+  maxDiscount Int
+  minOrder    Int     @default(0)
+  vertical    String  @default("shopping")
+  active      Boolean @default(true)
+}
+
+model Order {
+  id            String       @id @map("_id")
+  userId        String
+  user          User         @relation(fields: [userId], references: [id])
+  sellerName    String
+  status        String
+  items         Json
+  address       Json
+  subtotal      Int
+  discount      Int          @default(0)
+  deliveryFee   Int          @default(0)
+  total         Int
+  paymentMethod String
+  courier       String?
+  awb           String?
+  placedAt      DateTime     @default(now())
+  expectedAt    DateTime
+  events        OrderEvent[]
+
+  @@index([userId])
+}
+
+model OrderEvent {
+  id      String   @id @default(cuid()) @map("_id")
+  orderId String
+  order   Order    @relation(fields: [orderId], references: [id])
+  status  String
+  note    String
+  at      DateTime @default(now())
+
+  @@index([orderId])
+}
+
+model Service {
+  code          String    @id @map("_id")
+  label         String
+  photo         String
+  group         String
+  issues        String[]
+  visitCharge   Int
+  requiresQuote Boolean   @default(false)
+  sort          Int       @default(0)
+  live          Boolean   @default(true)
+  bookings      Booking[]
+}
+
+/// Service providers of every kind: tradespeople, drivers, riders, responders, agents.
+model Vendor {
+  id       String    @id @default(cuid()) @map("_id")
+  name     String
+  photo    String
+  phone    String?
+  rating   Float
+  jobs     Int
+  years    Int
+  services String[]
+  vehicle  String?
+  plate    String?
+  district String    @default("Jaipur")
+  online   Boolean   @default(true)
+  bookings Booking[]
+}
+
+/// One document per service booking. Status follows the state machine in docs 11.1.
+model Booking {
+  id          String         @id @map("_id")
+  userId      String
+  user        User           @relation(fields: [userId], references: [id])
+  serviceCode String
+  service     Service        @relation(fields: [serviceCode], references: [code])
+  vendorId    String?
+  vendor      Vendor?        @relation(fields: [vendorId], references: [id])
+  status      String
+  issue       String
+  urgency     String
+  scheduledAt DateTime
+  description String
+  address     Json
+  startCode   String
+  notified    Int            @default(0)
+  quote       Json?
+  invoice     Json?
+  rating      Int?
+  review      String?
+  createdAt   DateTime       @default(now())
+  updatedAt   DateTime       @updatedAt
+  events      BookingEvent[]
+
+  @@index([userId])
+}
+
+model BookingEvent {
+  id        String   @id @default(cuid()) @map("_id")
+  bookingId String
+  booking   Booking  @relation(fields: [bookingId], references: [id])
+  status    String
+  at        DateTime @default(now())
+
+  @@index([bookingId])
+}
+
+/// Cab ride (dispatch engine). Fare is system-calculated, never typed by the driver.
+model Ride {
+  id            String   @id @map("_id")
+  userId        String
+  user          User     @relation(fields: [userId], references: [id])
+  vehicle       String
+  pickup        Json
+  drop          Json
+  distanceKm    Float
+  durationMin   Int
+  fare          Json
+  status        String
+  otp           String
+  driver        Json?
+  paymentMethod String?
+  rating        Int?
+  scheduledAt   DateTime?
+  events        Json     @default("[]")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  @@index([userId])
+}
+
+/// Restaurants and cloud-kitchen brands (kind = "restaurant" | "kitchen").
+model Restaurant {
+  id         String     @id @map("_id")
+  name       String
+  kind       String
+  cuisine    String
+  photo      String
+  rating     Float
+  ratings    Int
+  etaMin     Int
+  costForTwo Int
+  pureVeg    Boolean    @default(false)
+  locality   String
+  open       Boolean    @default(true)
+  sort       Int        @default(0)
+  menu       MenuItem[]
+}
+
+model MenuItem {
+  id           String     @id @default(cuid()) @map("_id")
+  restaurantId String
+  restaurant   Restaurant @relation(fields: [restaurantId], references: [id])
+  section      String
+  name         String
+  description  String
+  price        Int
+  veg          Boolean
+  bestseller   Boolean    @default(false)
+  photo        String?
+
+  @@index([restaurantId])
+}
+
+/// Food and cloud-kitchen orders. Prepaid at checkout (docs 23.1 recommendation).
+model FoodOrder {
+  id             String    @id @map("_id")
+  userId         String
+  user           User      @relation(fields: [userId], references: [id])
+  restaurantId   String
+  restaurantName String
+  kind           String
+  items          Json
+  subtotal       Int
+  taxes          Int
+  deliveryFee    Int
+  total          Int
+  paymentMethod  String
+  address        Json
+  scheduledAt    DateTime?
+  status         String
+  rider          Json?
+  events         Json      @default("[]")
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+
+  @@index([userId])
+}
+
+/// Highway and health emergencies. Payment only after the rescue.
+model SosRequest {
+  id               String   @id @map("_id")
+  userId           String
+  user             User     @relation(fields: [userId], references: [id])
+  type             String
+  issue            String
+  note             String?
+  location         Json
+  status           String
+  responder        Json?
+  contactsNotified Int      @default(0)
+  invoice          Json?
+  events           Json     @default("[]")
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  @@index([userId])
+}
+
+model Property {
+  id          String      @id @map("_id")
+  title       String
+  type        String
+  bhk         Int?
+  areaSqft    Int
+  price       Int
+  locality    String
+  city        String
+  photos      String[]
+  amenities   String[]
+  description String
+  agentName   String
+  agentRating Float
+  verified    Boolean     @default(true)
+  listedAt    DateTime    @default(now())
+  shortlists  Shortlist[]
+  enquiries   Enquiry[]
+}
+
+model Shortlist {
+  id         String   @id @default(cuid()) @map("_id")
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  propertyId String
+  property   Property @relation(fields: [propertyId], references: [id])
+  createdAt  DateTime @default(now())
+
+  @@unique([userId, propertyId])
+}
+
+model Enquiry {
+  id         String    @id @map("_id")
+  userId     String
+  user       User      @relation(fields: [userId], references: [id])
+  propertyId String
+  property   Property  @relation(fields: [propertyId], references: [id])
+  message    String
+  visitAt    DateTime?
+  status     String
+  createdAt  DateTime  @default(now())
+
+  @@index([userId])
+}
+
+/// Double-entry ledger. Balances are always derived from entries.
+model LedgerAccount {
+  id      String        @id @default(cuid()) @map("_id")
+  ownerId String?
+  kind    String
+  entries LedgerEntry[]
+
+  @@index([ownerId, kind])
+}
+
+model LedgerJournal {
+  id             String        @id @default(cuid()) @map("_id")
+  type           String
+  title          String
+  ref            String?
+  idempotencyKey String        @unique
+  createdAt      DateTime      @default(now())
+  entries        LedgerEntry[]
+}
+
+model LedgerEntry {
+  id        String        @id @default(cuid()) @map("_id")
+  journalId String
+  journal   LedgerJournal @relation(fields: [journalId], references: [id])
+  accountId String
+  account   LedgerAccount @relation(fields: [accountId], references: [id])
+  debit     Int           @default(0)
+  credit    Int           @default(0)
+
+  @@index([accountId])
+}
+
+model Withdrawal {
+  id        String   @id @default(cuid()) @map("_id")
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  amount    Int
+  tds       Int
+  net       Int
+  bankLast4 String
+  status    String
+  createdAt DateTime @default(now())
+}
+
+model Subscription {
+  id          String   @id @default(cuid()) @map("_id")
+  userId      String   @unique
+  user        User     @relation(fields: [userId], references: [id])
+  amount      Int
+  status      String
+  autoRenew   Boolean  @default(true)
+  nextBilling DateTime
+  history     Json     @default("[]")
+}
+
+model IncomeStatement {
+  id         String    @id @default(cuid()) @map("_id")
+  memberId   String
+  month      String
+  lines      Json
+  total      Int
+  qualified  Boolean
+  creditedAt DateTime?
+
+  @@unique([memberId, month])
+}
+
+model Notification {
+  id        String    @id @default(cuid()) @map("_id")
+  userId    String
+  user      User      @relation(fields: [userId], references: [id])
+  kind      String
+  title     String
+  body      String
+  link      String?
+  readAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+}
