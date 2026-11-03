@@ -90,8 +90,11 @@ export class BookingsService {
     return this.get(userId, id);
   }
 
-  private async step(id: string, status: string, data: Record<string, unknown> = {}) {
-    await this.prisma.booking.update({ where: { id }, data: { status, ...data, events: { create: { status } } } });
+  /** Moves to `status`. With `from`, only if it is still in that status (two polls can race); returns whether it moved. */
+  private async step(id: string, status: string, data: Record<string, unknown> = {}, from?: string) {
+    const { count } = await this.prisma.booking.updateMany({ where: { id, ...(from ? { status: from } : {}) }, data: { status, ...data } });
+    if (count) await this.prisma.bookingEvent.create({ data: { bookingId: id, status } });
+    return count > 0;
   }
 
   private async simulate(id: string) {
@@ -105,16 +108,16 @@ export class BookingsService {
       case 'BROADCASTING': {
         const vendor = await this.prisma.vendor.findFirst({ where: { services: { has: b.serviceCode }, online: true }, orderBy: { rating: 'desc' } });
         if (!vendor) return;
-        await this.step(id, 'ACCEPTED', { vendorId: vendor.id });
+        if (!(await this.step(id, 'ACCEPTED', { vendorId: vendor.id }, b.status))) return;
         await this.notifications.notify(b.userId, 'booking', `${vendor.name.split(' ')[0]} accepted your request`, `${label} · #${id}`, `/booking/${id}`);
         return;
       }
       case 'ACCEPTED':
-        await this.step(id, 'EN_ROUTE');
+        if (!(await this.step(id, 'EN_ROUTE', {}, b.status))) return;
         await this.notifications.notify(b.userId, 'booking', `${label} is on the way`, `Share start code ${b.startCode} when they arrive`, `/booking/${id}`);
         return;
       case 'EN_ROUTE':
-        await this.step(id, 'STARTED');
+        if (!(await this.step(id, 'STARTED', {}, b.status))) return;
         if (b.service.requiresQuote) {
           const quote: Line[] = [
             { label: 'Labour (1 hr)', amount: 35000 },
@@ -128,14 +131,14 @@ export class BookingsService {
         }
         return;
       case 'QUOTE_APPROVED':
-        await this.step(id, 'COMPLETED');
+        await this.step(id, 'COMPLETED', {}, b.status);
         return;
       case 'COMPLETED': {
         const quoteLines = ((b.quote as { lines?: Line[] } | null)?.lines ?? [{ label: 'Labour (1 hr)', amount: 35000 }]) as Line[];
         const lines: Line[] = [{ label: 'Visit charge', amount: b.service.visitCharge }, ...quoteLines];
         const subtotal = lines.reduce((s, l) => s + l.amount, 0);
         const gst = Math.round((subtotal * GST_PCT) / 10000) * 100; // whole rupees
-        await this.step(id, 'INVOICED', { invoice: { number: `INV-${id.slice(2)}`, lines, subtotal, gst, total: subtotal + gst, photos: 3 } });
+        if (!(await this.step(id, 'INVOICED', { invoice: { number: `INV-${id.slice(2)}`, lines, subtotal, gst, total: subtotal + gst, photos: 3 } }, b.status))) return;
         await this.notifications.notify(b.userId, 'booking', 'Work completed · invoice ready', `Pay ₹${(subtotal + gst) / 100} for #${id}`, `/booking/${id}`);
         return;
       }

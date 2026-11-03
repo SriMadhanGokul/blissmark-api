@@ -51,10 +51,13 @@ export class SosService {
     return this.get(userId, id);
   }
 
-  private async step(id: string, status: string, data: Record<string, unknown> = {}) {
+  /** Moves to `status`. With `from`, only if it is still in that status (two polls can race); returns whether it moved. */
+  private async step(id: string, status: string, data: Record<string, unknown> = {}, from?: string) {
     const s = await this.prisma.sosRequest.findUniqueOrThrow({ where: { id } });
+    if (from && s.status !== from) return false;
     const events = [...((s.events as { status: string; at: string }[]) ?? []), { status, at: new Date() }];
-    await this.prisma.sosRequest.update({ where: { id }, data: { status, events, ...data } });
+    const { count } = await this.prisma.sosRequest.updateMany({ where: { id, ...(from ? { status: from } : {}) }, data: { status, events, ...data } });
+    return count > 0;
   }
 
   private async simulate(id: string) {
@@ -63,15 +66,15 @@ export class SosService {
     if (!s || !rule || (Date.now() - s.updatedAt.getTime()) / 1000 < rule.afterS) return;
     if (rule.next === 'RESPONDER_ASSIGNED') {
       const v = await this.prisma.vendor.findFirst({ where: { services: { has: s.type === 'health' ? 'ambulance' : 'tow' }, online: true }, orderBy: { rating: 'desc' } });
-      await this.step(id, rule.next, { responder: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null });
+      if (!(await this.step(id, rule.next, { responder: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null }, s.status))) return;
       await this.notifications.notify(s.userId, 'sos', 'Help is assigned', `${v?.name ?? 'A responder'} is coming to you`, `/sos/${id}`);
     } else if (rule.next === 'RESOLVED') {
       const lines = PRICE[s.type === 'health' ? 'health' : s.issue] ?? [];
       const total = lines.reduce((a, l) => a + l.amount, 0);
-      await this.step(id, 'RESOLVED', { invoice: { lines, total } });
+      if (!(await this.step(id, 'RESOLVED', { invoice: { lines, total } }, s.status))) return;
       await this.notifications.notify(s.userId, 'sos', 'You are safe', `Pay ₹${(total / 100).toLocaleString('en-IN')} whenever you are ready`, `/sos/${id}`);
     } else {
-      await this.step(id, rule.next);
+      await this.step(id, rule.next, {}, s.status);
     }
   }
 

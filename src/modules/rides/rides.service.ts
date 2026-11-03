@@ -107,10 +107,13 @@ export class RidesService {
     return this.get(userId, id);
   }
 
-  private async step(id: string, status: string, data: Record<string, unknown> = {}) {
+  /** Moves to `status`. With `from`, only if it is still in that status (two polls can race); returns whether it moved. */
+  private async step(id: string, status: string, data: Record<string, unknown> = {}, from?: string) {
     const r = await this.prisma.ride.findUniqueOrThrow({ where: { id } });
+    if (from && r.status !== from) return false;
     const events = [...((r.events as { status: string; at: string }[]) ?? []), { status, at: new Date() }];
-    await this.prisma.ride.update({ where: { id }, data: { status, events, ...data } });
+    const { count } = await this.prisma.ride.updateMany({ where: { id, ...(from ? { status: from } : {}) }, data: { status, events, ...data } });
+    return count > 0;
   }
 
   private async simulate(id: string) {
@@ -120,10 +123,10 @@ export class RidesService {
     if (r.status === 'SEARCHING') {
       const d = await this.prisma.vendor.findFirst({ where: { services: { has: `cab:${r.vehicle}` }, online: true }, orderBy: { rating: 'desc' } });
       if (!d) return;
-      await this.step(id, 'ACCEPTED', { driver: { name: d.name, photo: d.photo, rating: d.rating, vehicle: d.vehicle, plate: d.plate, trips: d.jobs } });
+      if (!(await this.step(id, 'ACCEPTED', { driver: { name: d.name, photo: d.photo, rating: d.rating, vehicle: d.vehicle, plate: d.plate, trips: d.jobs } }, r.status))) return;
       await this.notifications.notify(r.userId, 'ride', `${d.name.split(' ')[0]} is coming to pick you up`, `${d.vehicle} · ${d.plate} · OTP ${r.otp}`, `/ride/${id}`);
     } else {
-      await this.step(id, rule.next);
+      if (!(await this.step(id, rule.next, {}, r.status))) return;
       if (rule.next === 'COMPLETED') {
         const fare = r.fare as { total: number };
         await this.notifications.notify(r.userId, 'ride', 'You have arrived', `Pay ₹${(fare.total / 100).toLocaleString('en-IN')} for ride #${id}`, `/ride/${id}`);

@@ -105,10 +105,13 @@ export class FoodService {
     return this.get(userId, id);
   }
 
-  private async step(id: string, status: string, data: Record<string, unknown> = {}) {
+  /** Moves to `status`. With `from`, only if it is still in that status (two polls can race); returns whether it moved. */
+  private async step(id: string, status: string, data: Record<string, unknown> = {}, from?: string) {
     const o = await this.prisma.foodOrder.findUniqueOrThrow({ where: { id } });
+    if (from && o.status !== from) return false;
     const events = [...((o.events as { status: string; at: string }[]) ?? []), { status, at: new Date() }];
-    await this.prisma.foodOrder.update({ where: { id }, data: { status, events, ...data } });
+    const { count } = await this.prisma.foodOrder.updateMany({ where: { id, ...(from ? { status: from } : {}) }, data: { status, events, ...data } });
+    return count > 0;
   }
 
   private async simulate(id: string) {
@@ -118,10 +121,8 @@ export class FoodService {
     if (o.status === 'PLACED' && o.scheduledAt && Date.now() < o.scheduledAt.getTime() - 30 * 60 * 1000) return;
     if (rule.next === 'RIDER_ASSIGNED') {
       const v = await this.prisma.vendor.findFirst({ where: { services: { has: 'rider' }, online: true }, orderBy: { rating: 'desc' } });
-      await this.step(id, rule.next, { rider: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null });
-    } else {
-      await this.step(id, rule.next);
-    }
+      if (!(await this.step(id, rule.next, { rider: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null }, o.status))) return;
+    } else if (!(await this.step(id, rule.next, {}, o.status))) return;
     const note = NOTE[rule.next];
     if (note) await this.notifications.notify(o.userId, 'food', rule.next === 'PREPARING' ? `${o.restaurantName} ${note}` : note, `Order #${id}`, `/food-order/${id}`);
   }
