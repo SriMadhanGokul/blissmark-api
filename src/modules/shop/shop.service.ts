@@ -41,6 +41,7 @@ export class ShopService {
       q.sort === 'price_asc' ? { price: 'asc' } : q.sort === 'price_desc' ? { price: 'desc' } : q.sort === 'rating' ? { rating: 'desc' } : { reviews: 'desc' };
     return this.prisma.product.findMany({
       where: {
+        active: true,
         ...(q.category ? { categoryId: q.category } : {}),
         ...(q.trending ? { trending: true } : {}),
         ...(q.q ? { OR: [{ title: { contains: q.q, mode: 'insensitive' } }, { brand: { contains: q.q, mode: 'insensitive' } }] } : {}),
@@ -53,7 +54,7 @@ export class ShopService {
   async product(id: string) {
     const p = await this.prisma.product.findUnique({ where: { id }, include: { seller: true, category: true } });
     if (!p) throw notFound('Product');
-    const similar = await this.prisma.product.findMany({ where: { categoryId: p.categoryId, id: { not: id } }, take: 6 });
+    const similar = await this.prisma.product.findMany({ where: { categoryId: p.categoryId, id: { not: id }, active: true }, take: 6 });
     return { ...p, similar };
   }
 
@@ -184,19 +185,40 @@ export class ShopService {
       await tx.user.update({ where: { id: userId }, data: { coupon: null } });
       return created;
     });
+    for (const o of orders) {
+      const v = await this.sellerVendor(o.sellerName);
+      if (v?.userId) await this.notifications.notify(v.userId, 'partner', 'New order to pack', `#${o.id} · ₹${o.total / 100}`, '/jobs');
+    }
     return { orders: orders.map((o) => ({ id: o.id, total: o.total, expectedAt: o.expectedAt })), total: cart.total, method };
   }
 
   /* ---------------- orders ---------------- */
 
-  /** Advances the demo timeline: writes any shipment events whose time has come. */
+  /** The vendor-app account behind a seller name, if the seller has one. */
+  async sellerVendor(sellerName: string) {
+    const seller = await this.prisma.seller.findFirst({ where: { name: sellerName }, select: { id: true } });
+    return seller ? this.prisma.vendor.findFirst({ where: { sellerId: seller.id, userId: { not: null } } }) : null;
+  }
+
+  /**
+   * Advances the demo timeline: writes any shipment events whose time has come.
+   * An app seller packs and ships themselves; the courier legs then run from the ship time.
+   */
   private async advance(orderId: string) {
     const o = await this.prisma.order.findUnique({ where: { id: orderId }, include: { events: true } });
     if (!o || o.status === 'CANCELLED' || o.status === 'DELIVERED') return;
-    const elapsedMin = (Date.now() - o.placedAt.getTime()) / 60000;
-    const due = TIMELINE.filter((t) => t.afterMin <= elapsedMin && !o.events.some((e) => e.status === t.status));
+    let start = o.placedAt;
+    let timeline = TIMELINE;
+    if (await this.sellerVendor(o.sellerName)) {
+      const shipped = o.events.find((e) => e.status === 'SHIPPED');
+      if (!shipped) return;
+      start = shipped.at;
+      timeline = TIMELINE.filter((t) => t.afterMin > 5).map((t) => ({ ...t, afterMin: t.afterMin - 5 }));
+    }
+    const elapsedMin = (Date.now() - start.getTime()) / 60000;
+    const due = timeline.filter((t) => t.afterMin <= elapsedMin && !o.events.some((e) => e.status === t.status));
     for (const t of due) {
-      await this.prisma.orderEvent.create({ data: { orderId, status: t.status, note: t.note, at: new Date(o.placedAt.getTime() + t.afterMin * 60000) } });
+      await this.prisma.orderEvent.create({ data: { orderId, status: t.status, note: t.note, at: new Date(start.getTime() + t.afterMin * 60000) } });
       if (t.status === 'OUT_FOR_DELIVERY' || t.status === 'DELIVERED') {
         await this.notifications.notify(o.userId, 'order', t.note, `Order #${o.id} from ${o.sellerName}`, `/orders/${o.id}`);
       }
@@ -224,8 +246,15 @@ export class ShopService {
   async cancel(userId: string, id: string) {
     const o = await this.order(userId, id);
     if (!['PLACED', 'PACKED'].includes(o.status)) throw invalid('CANNOT_CANCEL', 'This order has already shipped and cannot be cancelled');
+    await this.cancelAndRefund(o, 'Cancelled by you');
+    return this.order(userId, id);
+  }
+
+  /** Cancels before shipping and refunds prepaid money to the customer's wallet (customer or seller). */
+  async cancelAndRefund(o: { id: string; userId: string; sellerName: string; total: number; paymentMethod: string }, note: string) {
+    const { id, userId } = o;
     await this.prisma.$transaction(async (tx) => {
-      await tx.order.update({ where: { id }, data: { status: 'CANCELLED', events: { create: { status: 'CANCELLED', note: 'Cancelled by you' } } } });
+      await tx.order.update({ where: { id }, data: { status: 'CANCELLED', events: { create: { status: 'CANCELLED', note } } } });
       if (o.paymentMethod !== 'cod') {
         await this.ledger.post(tx, { type: 'refund', title: `Refund: order ${id}`, ref: id, key: `order:${id}:refund` }, [
           { kind: 'vendor_earnings', ownerId: `seller:${o.sellerName}`, debit: o.total },
@@ -234,7 +263,6 @@ export class ShopService {
       }
       await this.notifications.notify(userId, 'order', 'Order cancelled', o.paymentMethod === 'cod' ? `#${id} was cancelled` : `₹${o.total / 100} refunded to your wallet`, '/wallet', tx);
     });
-    return this.order(userId, id);
   }
 
   async defaultAddress(userId: string) {

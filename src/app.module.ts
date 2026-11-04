@@ -20,6 +20,10 @@ import { PropertyService } from './modules/property/property.service';
 import { RidesService } from './modules/rides/rides.service';
 import { SosService } from './modules/sos/sos.service';
 import { NotificationsService } from './modules/notifications/notifications.service';
+import { CatalogService } from './modules/partner/catalog.service';
+import { JobsService } from './modules/partner/jobs.service';
+import { PartnerController } from './modules/partner/partner.controller';
+import { PartnerService } from './modules/partner/partner.service';
 import { ShopController } from './modules/shop/shop.controller';
 import { ShopService } from './modules/shop/shop.service';
 import { UsersService } from './modules/users/users.service';
@@ -28,7 +32,7 @@ import { WalletService } from './modules/wallet/wallet.service';
 
 @Module({
   imports: [JwtModule.register({ global: true, secret: process.env.JWT_SECRET })],
-  controllers: [AuthController, HomeController, ShopController, BookingsController, MoneyController, MoreController],
+  controllers: [AuthController, HomeController, ShopController, BookingsController, MoneyController, MoreController, PartnerController],
   providers: [
     PrismaService,
     LedgerService,
@@ -45,6 +49,9 @@ import { WalletService } from './modules/wallet/wallet.service';
     SosService,
     PropertyService,
     ActivityService,
+    PartnerService,
+    JobsService,
+    CatalogService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrorFilter },
   ],

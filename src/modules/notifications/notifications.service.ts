@@ -3,7 +3,7 @@ import type { Prisma } from '@prisma/client';
 
 import { PrismaService } from '../../common/prisma.service';
 
-export type NotificationKind = 'order' | 'booking' | 'payout' | 'wallet' | 'offer' | 'account' | 'ride' | 'food' | 'sos' | 'property';
+export type NotificationKind = 'order' | 'booking' | 'payout' | 'wallet' | 'offer' | 'account' | 'ride' | 'food' | 'sos' | 'property' | 'partner';
 
 /** In-app inbox. Push (FCM), SMS and WhatsApp fan-out plug in here later. */
 @Injectable()
@@ -14,16 +14,21 @@ export class NotificationsService {
     return tx.notification.create({ data: { userId, kind, title, body, link } });
   }
 
-  list(userId: string) {
-    return this.prisma.notification.findMany({ where: { userId }, orderBy: { createdAt: 'desc' }, take: 50 });
+  /** A vendor is also a member: the customer inbox leaves out vendor-app alerts and vice versa. */
+  private scope(partner: boolean): Prisma.NotificationWhereInput {
+    return partner ? { kind: 'partner' } : { kind: { not: 'partner' } };
   }
 
-  unread(userId: string) {
-    return this.prisma.notification.count({ where: { userId, readAt: null } });
+  list(userId: string, partner = false) {
+    return this.prisma.notification.findMany({ where: { userId, ...this.scope(partner) }, orderBy: { createdAt: 'desc' }, take: 50 });
   }
 
-  async markRead(userId: string, ids?: string[]) {
-    await this.prisma.notification.updateMany({ where: { userId, readAt: null, ...(ids?.length ? { id: { in: ids } } : {}) }, data: { readAt: new Date() } });
+  unread(userId: string, partner = false) {
+    return this.prisma.notification.count({ where: { userId, readAt: null, ...this.scope(partner) } });
+  }
+
+  async markRead(userId: string, ids?: string[], partner = false) {
+    await this.prisma.notification.updateMany({ where: { userId, readAt: null, ...this.scope(partner), ...(ids?.length ? { id: { in: ids } } : {}) }, data: { readAt: new Date() } });
     return { ok: true };
   }
 }

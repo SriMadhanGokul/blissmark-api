@@ -122,6 +122,7 @@ model Product {
   colours     Json       @default("[]")
   stock       Int        @default(100)
   trending    Boolean    @default(false)
+  active      Boolean    @default(true)
   cartItems   CartItem[]
 }
 
@@ -208,6 +209,66 @@ model Vendor {
   district String    @default("Jaipur")
   online   Boolean   @default(true)
   bookings Booking[]
+
+  /// Vendor-app fields. Seeded providers have no userId and are played by the simulators.
+  userId       String?        @unique
+  category     String         @default("service") // service | driver | rider | responder | restaurant | seller | agent
+  status       String         @default("approved") // draft | pending | approved | suspended
+  businessName String?
+  radiusKm     Int            @default(10)
+  pincodes     String[]       @default([])
+  hours        Json?
+  holiday      Boolean        @default(false)
+  restaurantId String?
+  sellerId     String?
+  bank         Json?
+  accepted     Int            @default(0)
+  declined     Int            @default(0)
+  cancelled    Int            @default(0)
+  submittedAt  DateTime?
+  createdAt    DateTime       @default(now())
+  docs         VendorDoc[]
+  payouts      VendorPayout[]
+  tickets      SupportTicket[]
+}
+
+/// KYC document a vendor uploads during onboarding (image is a small JPEG data URI).
+model VendorDoc {
+  id        String   @id @default(cuid()) @map("_id")
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  kind      String
+  number    String?
+  image     String?
+  status    String   @default("submitted")
+  createdAt DateTime @default(now())
+
+  @@index([vendorId])
+}
+
+model VendorPayout {
+  id        String   @id @default(cuid()) @map("_id")
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  amount    Int
+  bankLast4 String
+  status    String
+  createdAt DateTime @default(now())
+
+  @@index([vendorId])
+}
+
+model SupportTicket {
+  id        String   @id @default(cuid()) @map("_id")
+  vendorId  String
+  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  subject   String
+  message   String
+  status    String   @default("open")
+  reply     String?
+  createdAt DateTime @default(now())
+
+  @@index([vendorId])
 }
 
 /// One document per service booking. Status follows the state machine in docs 11.1.
@@ -219,6 +280,7 @@ model Booking {
   service     Service        @relation(fields: [serviceCode], references: [code])
   vendorId    String?
   vendor      Vendor?        @relation(fields: [vendorId], references: [id])
+  declinedBy  String[]       @default([])
   status      String
   issue       String
   urgency     String
@@ -262,6 +324,8 @@ model Ride {
   status        String
   otp           String
   driver        Json?
+  driverId      String?
+  declinedBy    String[] @default([])
   paymentMethod String?
   rating        Int?
   scheduledAt   DateTime?
@@ -301,6 +365,7 @@ model MenuItem {
   veg          Boolean
   bestseller   Boolean    @default(false)
   photo        String?
+  available    Boolean    @default(true)
 
   @@index([restaurantId])
 }
@@ -323,6 +388,9 @@ model FoodOrder {
   scheduledAt    DateTime?
   status         String
   rider          Json?
+  riderId        String?
+  readyAt        DateTime?
+  declinedBy     String[]  @default([])
   events         Json      @default("[]")
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -341,6 +409,8 @@ model SosRequest {
   location         Json
   status           String
   responder        Json?
+  responderId      String?
+  declinedBy       String[] @default([])
   contactsNotified Int      @default(0)
   invoice          Json?
   events           Json     @default("[]")
@@ -364,6 +434,8 @@ model Property {
   description String
   agentName   String
   agentRating Float
+  agentId     String?
+  status      String      @default("active")
   verified    Boolean     @default(true)
   listedAt    DateTime    @default(now())
   shortlists  Shortlist[]
@@ -390,6 +462,7 @@ model Enquiry {
   message    String
   visitAt    DateTime?
   status     String
+  reply      String?
   createdAt  DateTime  @default(now())
 
   @@index([userId])

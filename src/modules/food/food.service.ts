@@ -4,11 +4,14 @@ import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { APP_PRIORITY_S, SIM_VENDOR, alertOwner, alertVendors, appVendorsOnline, isAppVendor } from '../partner/dispatch';
 import { LedgerService } from '../wallet/ledger.service';
 
 const TAX_PCT = 5;
 const DELIVERY_FEE = 3000;
 const FREE_DELIVERY_FROM = 49900;
+/** Flat payout to a delivery partner per completed drop, paid from platform commission. */
+export const RIDER_PAY = 4000;
 const ACTIVE = ['PLACED', 'PREPARING', 'RIDER_ASSIGNED', 'PICKED_UP'];
 /** Simulated kitchen and rider. Scheduled orders start preparing 30 min before the slot. */
 const SIM: Record<string, { next: string; afterS: number }> = {
@@ -40,7 +43,7 @@ export class FoodService {
   }
 
   async restaurant(id: string) {
-    const r = await this.prisma.restaurant.findUnique({ where: { id }, include: { menu: true } });
+    const r = await this.prisma.restaurant.findUnique({ where: { id }, include: { menu: { where: { available: true } } } });
     if (!r) throw notFound('Restaurant');
     return r;
   }
@@ -102,6 +105,7 @@ export class FoodService {
       ]);
       await this.notifications.notify(userId, 'food', 'Order placed', `${r.name} · #${id}${scheduledAt ? ' · scheduled' : ''}`, `/food-order/${id}`, tx);
     });
+    await alertOwner(this.prisma, this.notifications, { restaurantId: r.id }, 'New order', `#${id} · ${lines.length} item(s) · ₹${total / 100}`, '/offers');
     return this.get(userId, id);
   }
 
@@ -117,14 +121,26 @@ export class FoodService {
   private async simulate(id: string) {
     const o = await this.prisma.foodOrder.findUnique({ where: { id } });
     const rule = o && SIM[o.status];
-    if (!o || !rule || (Date.now() - o.updatedAt.getTime()) / 1000 < rule.afterS) return;
+    if (!o || !rule || (await isAppVendor(this.prisma, o.riderId))) return; // a real rider reports pickup and drop
+    // a kitchen on the vendor app accepts orders and marks them ready itself
+    const appKitchen = await this.prisma.vendor.count({ where: { restaurantId: o.restaurantId, userId: { not: null } } });
+    if (appKitchen && (o.status === 'PLACED' || (o.status === 'PREPARING' && !o.readyAt))) return;
+    const since = o.status === 'PREPARING' && o.readyAt ? o.readyAt : o.updatedAt;
+    const wait = o.status === 'PREPARING' && (await appVendorsOnline(this.prisma, 'rider')) ? APP_PRIORITY_S : rule.afterS;
+    if ((Date.now() - since.getTime()) / 1000 < wait) return;
     if (o.status === 'PLACED' && o.scheduledAt && Date.now() < o.scheduledAt.getTime() - 30 * 60 * 1000) return;
     if (rule.next === 'RIDER_ASSIGNED') {
-      const v = await this.prisma.vendor.findFirst({ where: { services: { has: 'rider' }, online: true }, orderBy: { rating: 'desc' } });
-      if (!(await this.step(id, rule.next, { rider: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null }, o.status))) return;
+      const v = await this.prisma.vendor.findFirst({ where: { ...SIM_VENDOR, services: { has: 'rider' }, online: true }, orderBy: { rating: 'desc' } });
+      if (!(await this.step(id, rule.next, { riderId: v?.id, rider: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null }, o.status))) return;
     } else if (!(await this.step(id, rule.next, {}, o.status))) return;
+    if (rule.next === 'PREPARING') await this.alertRiders(o.restaurantName, id);
     const note = NOTE[rule.next];
     if (note) await this.notifications.notify(o.userId, 'food', rule.next === 'PREPARING' ? `${o.restaurantName} ${note}` : note, `Order #${id}`, `/food-order/${id}`);
+  }
+
+  /** Offers a freshly accepted order to delivery partners on the vendor app. */
+  alertRiders(restaurantName: string, id: string) {
+    return alertVendors(this.prisma, this.notifications, 'rider', 'New delivery nearby', `Pick up from ${restaurantName} · #${id}`);
   }
 
   async list(userId: string) {
@@ -147,6 +163,13 @@ export class FoodService {
   async cancel(userId: string, id: string) {
     const o = await this.get(userId, id);
     if (o.status !== 'PLACED') throw invalid('CANNOT_CANCEL', 'The kitchen has started preparing your food');
+    await this.refund(o, 'Order cancelled');
+    return this.get(userId, id);
+  }
+
+  /** Cancels a placed order and returns the money to the customer's wallet (customer or kitchen). */
+  async refund(o: { id: string; userId: string; restaurantId: string; restaurantName: string; total: number; subtotal: number }, title: string) {
+    const { id, userId } = o;
     await this.prisma.$transaction(async (tx) => {
       await this.ledger.post(tx, { type: 'refund', title: `Refund: ${o.restaurantName}`, ref: id, key: `food:${id}:refund` }, [
         { kind: 'vendor_earnings', ownerId: `restaurant:${o.restaurantId}`, debit: o.total - Math.round(o.subtotal * 0.15) },
@@ -155,7 +178,6 @@ export class FoodService {
       ]);
     });
     await this.step(id, 'CANCELLED');
-    await this.notifications.notify(userId, 'food', 'Order cancelled', `₹${o.total / 100} refunded to your wallet`, '/wallet');
-    return this.get(userId, id);
+    await this.notifications.notify(userId, 'food', title, `₹${o.total / 100} refunded to your wallet`, '/wallet');
   }
 }

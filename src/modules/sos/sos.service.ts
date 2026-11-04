@@ -4,6 +4,7 @@ import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline, isAppVendor } from '../partner/dispatch';
 import { LedgerService } from '../wallet/ledger.service';
 
 export const SOS_ISSUES = {
@@ -12,7 +13,7 @@ export const SOS_ISSUES = {
 } as const;
 
 /** Charges billed after the rescue (paise). */
-const PRICE: Record<string, { label: string; amount: number }[]> = {
+export const PRICE: Record<string, { label: string; amount: number }[]> = {
   Tow: [{ label: 'Towing (up to 10 km)', amount: 120000 }],
   'Flat tyre': [{ label: 'Tyre change / puncture', amount: 45000 }],
   'Out of fuel': [{ label: 'Fuel delivery charge', amount: 30000 }, { label: 'Fuel (5 L)', amount: 52500 }],
@@ -48,6 +49,7 @@ export class SosService {
       data: { id, userId, type: b.type, issue: b.issue, note: b.note, location: b.location, status: 'ALERTED', contactsNotified: 2, events: [{ status: 'ALERTED', at: new Date() }] },
     });
     await this.notifications.notify(userId, 'sos', b.type === 'health' ? 'Ambulance requested' : 'Roadside help requested', 'Blissmark control room and your 2 emergency contacts are alerted.', `/sos/${id}`);
+    await alertVendors(this.prisma, this.notifications, b.type === 'health' ? 'ambulance' : 'tow', b.type === 'health' ? 'Ambulance needed now' : 'Roadside SOS', `${b.issue} · ${b.location.label}`);
     return this.get(userId, id);
   }
 
@@ -63,10 +65,13 @@ export class SosService {
   private async simulate(id: string) {
     const s = await this.prisma.sosRequest.findUnique({ where: { id } });
     const rule = s && SIM[s.status];
-    if (!s || !rule || (Date.now() - s.updatedAt.getTime()) / 1000 < rule.afterS) return;
+    if (!s || !rule || (await isAppVendor(this.prisma, s.responderId))) return; // real responders report their own progress
+    const service = s.type === 'health' ? 'ambulance' : 'tow';
+    const wait = s.status === 'ALERTED' && (await appVendorsOnline(this.prisma, service)) ? APP_PRIORITY_S : rule.afterS;
+    if ((Date.now() - s.updatedAt.getTime()) / 1000 < wait) return;
     if (rule.next === 'RESPONDER_ASSIGNED') {
-      const v = await this.prisma.vendor.findFirst({ where: { services: { has: s.type === 'health' ? 'ambulance' : 'tow' }, online: true }, orderBy: { rating: 'desc' } });
-      if (!(await this.step(id, rule.next, { responder: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null }, s.status))) return;
+      const v = await this.prisma.vendor.findFirst({ where: { ...SIM_VENDOR, services: { has: service }, online: true }, orderBy: { rating: 'desc' } });
+      if (!(await this.step(id, rule.next, { responderId: v?.id, responder: v ? { name: v.name, photo: v.photo, rating: v.rating, vehicle: v.vehicle, plate: v.plate } : null }, s.status))) return;
       await this.notifications.notify(s.userId, 'sos', 'Help is assigned', `${v?.name ?? 'A responder'} is coming to you`, `/sos/${id}`);
     } else if (rule.next === 'RESOLVED') {
       const lines = PRICE[s.type === 'health' ? 'health' : s.issue] ?? [];
@@ -111,7 +116,7 @@ export class SosService {
       if (!source.length) throw invalid('WALLET_LOW', 'Your wallet balance is not enough', 'payment');
       await this.ledger.post(tx, { type: 'sos', title: s.type === 'health' ? 'Ambulance' : 'Roadside assistance', ref: id, key: `sos:${id}:pay` }, [
         ...source,
-        { kind: 'vendor_earnings', ownerId: `responder:${(s.responder as { name?: string } | null)?.name ?? 'unknown'}`, credit: total },
+        { kind: 'vendor_earnings', ownerId: s.responderId ?? `responder:${(s.responder as { name?: string } | null)?.name ?? 'unknown'}`, credit: total },
       ]);
     });
     await this.step(id, 'PAID');

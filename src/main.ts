@@ -2,13 +2,16 @@ import './env';
 import 'reflect-metadata';
 import { HttpStatus, ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import type { NestExpressApplication } from '@nestjs/platform-express';
 import type { ValidationError } from 'class-validator';
 
 import { AppModule } from './app.module';
 import { AppError } from './common/errors';
 
 async function bootstrap() {
-  const app = await NestFactory.create(AppModule, { cors: true });
+  const app = await NestFactory.create<NestExpressApplication>(AppModule, { cors: true });
+  // vendor KYC and catalog photos arrive as compressed JPEG data URIs
+  app.useBodyParser('json', { limit: '3mb' });
   app.setGlobalPrefix('v1');
   app.useGlobalPipes(
     new ValidationPipe({

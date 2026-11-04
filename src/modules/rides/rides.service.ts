@@ -4,6 +4,7 @@ import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline, isAppVendor } from '../partner/dispatch';
 import { LedgerService } from '../wallet/ledger.service';
 
 export type Place = { label: string; line1: string; lat: number; lng: number };
@@ -104,6 +105,7 @@ export class RidesService {
         events: [{ status: 'SEARCHING', at: new Date() }],
       },
     });
+    await alertVendors(this.prisma, this.notifications, `cab:${b.vehicle}`, 'New ride request', `${b.pickup.label} → ${b.drop.label} · ₹${Math.round(opt.fare.total / 100)}`);
     return this.get(userId, id);
   }
 
@@ -119,11 +121,13 @@ export class RidesService {
   private async simulate(id: string) {
     const r = await this.prisma.ride.findUnique({ where: { id } });
     const rule = r && SIM[r.status];
-    if (!r || !rule || (Date.now() - r.updatedAt.getTime()) / 1000 < rule.afterS) return;
+    if (!r || !rule || (await isAppVendor(this.prisma, r.driverId))) return; // real drivers drive their own trips
+    const wait = r.status === 'SEARCHING' && (await appVendorsOnline(this.prisma, `cab:${r.vehicle}`)) ? APP_PRIORITY_S : rule.afterS;
+    if ((Date.now() - r.updatedAt.getTime()) / 1000 < wait) return;
     if (r.status === 'SEARCHING') {
-      const d = await this.prisma.vendor.findFirst({ where: { services: { has: `cab:${r.vehicle}` }, online: true }, orderBy: { rating: 'desc' } });
+      const d = await this.prisma.vendor.findFirst({ where: { ...SIM_VENDOR, services: { has: `cab:${r.vehicle}` }, online: true }, orderBy: { rating: 'desc' } });
       if (!d) return;
-      if (!(await this.step(id, 'ACCEPTED', { driver: { name: d.name, photo: d.photo, rating: d.rating, vehicle: d.vehicle, plate: d.plate, trips: d.jobs } }, r.status))) return;
+      if (!(await this.step(id, 'ACCEPTED', { driverId: d.id, driver: { name: d.name, photo: d.photo, rating: d.rating, vehicle: d.vehicle, plate: d.plate, trips: d.jobs } }, r.status))) return;
       await this.notifications.notify(r.userId, 'ride', `${d.name.split(' ')[0]} is coming to pick you up`, `${d.vehicle} · ${d.plate} · OTP ${r.otp}`, `/ride/${id}`);
     } else {
       if (!(await this.step(id, rule.next, {}, r.status))) return;
@@ -169,7 +173,7 @@ export class RidesService {
         const commission = Math.round(total * 0.15);
         await this.ledger.post(tx, { type: 'ride', title: 'Cab ride', ref: id, key: `ride:${id}:pay` }, [
           ...source,
-          { kind: 'vendor_earnings', ownerId: `driver:${(r.driver as { name?: string } | null)?.name ?? 'unknown'}`, credit: total - commission },
+          { kind: 'vendor_earnings', ownerId: r.driverId ?? `driver:${(r.driver as { name?: string } | null)?.name ?? 'unknown'}`, credit: total - commission },
           { kind: 'platform_commission', credit: commission },
         ]);
       }
@@ -182,6 +186,10 @@ export class RidesService {
     const r = await this.get(userId, id);
     if (r.status !== 'PAID') throw invalid('NOT_RATEABLE', 'You can rate after paying');
     await this.prisma.ride.update({ where: { id }, data: { rating } });
+    if (r.driverId) {
+      const v = await this.prisma.vendor.findUniqueOrThrow({ where: { id: r.driverId } });
+      await this.prisma.vendor.update({ where: { id: v.id }, data: { jobs: v.jobs + 1, rating: Math.round(((v.rating * v.jobs + rating) / (v.jobs + 1)) * 10) / 10 } });
+    }
     return this.get(userId, id);
   }
 }

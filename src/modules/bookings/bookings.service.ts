@@ -4,10 +4,11 @@ import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
+import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline } from '../partner/dispatch';
 import { LedgerService } from '../wallet/ledger.service';
 
 export const COMMISSION_PCT = 15;
-const GST_PCT = 18;
+export const GST_PCT = 18;
 export const OPEN_HOUR = 8;
 export const CLOSE_HOUR = 20;
 const LEAVE_BEFORE_MS = 30 * 60 * 1000; // pro sets off 30 min before the slot
@@ -87,6 +88,8 @@ export class BookingsService {
         events: { create: { status: 'BROADCASTING' } },
       },
     });
+    const when = b.urgency === 'now' ? 'as soon as possible' : scheduledAt.toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' });
+    await alertVendors(this.prisma, this.notifications, b.serviceCode, `New ${service.label.toLowerCase()} job`, `${b.issue} · ${address.city} · ${when}`);
     return this.get(userId, id);
   }
 
@@ -98,15 +101,18 @@ export class BookingsService {
   }
 
   private async simulate(id: string) {
-    const b = await this.prisma.booking.findUnique({ where: { id }, include: { service: true } });
+    const b = await this.prisma.booking.findUnique({ where: { id }, include: { service: true, vendor: true } });
     if (!b) return;
+    if (b.vendor?.userId) return; // a real partner drives this job from the vendor app
     const rule = SIM[b.status];
-    if (!rule || (Date.now() - b.updatedAt.getTime()) / 1000 < rule.afterS) return;
+    // app vendors get the first chance to accept a broadcast
+    const wait = b.status === 'BROADCASTING' && (await appVendorsOnline(this.prisma, b.serviceCode)) ? APP_PRIORITY_S : rule?.afterS;
+    if (!rule || !wait || (Date.now() - b.updatedAt.getTime()) / 1000 < wait) return;
     if (b.status === 'ACCEPTED' && Date.now() < b.scheduledAt.getTime() - LEAVE_BEFORE_MS) return;
     const label = b.service.label;
     switch (b.status) {
       case 'BROADCASTING': {
-        const vendor = await this.prisma.vendor.findFirst({ where: { services: { has: b.serviceCode }, online: true }, orderBy: { rating: 'desc' } });
+        const vendor = await this.prisma.vendor.findFirst({ where: { ...SIM_VENDOR, services: { has: b.serviceCode }, online: true }, orderBy: { rating: 'desc' } });
         if (!vendor) return;
         if (!(await this.step(id, 'ACCEPTED', { vendorId: vendor.id }, b.status))) return;
         await this.notifications.notify(b.userId, 'booking', `${vendor.name.split(' ')[0]} accepted your request`, `${label} · #${id}`, `/booking/${id}`);
