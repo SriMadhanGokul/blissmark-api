@@ -5,6 +5,10 @@ import { JwtModule } from '@nestjs/jwt';
 import { AuthGuard } from './common/auth';
 import { ErrorFilter } from './common/errors';
 import { PrismaService } from './common/prisma.service';
+import { AdminOpsService } from './modules/admin/admin-ops.service';
+import { AdminController } from './modules/admin/admin.controller';
+import { AdminService } from './modules/admin/admin.service';
+import { SettingsService } from './modules/admin/settings.service';
 import { AuthController } from './modules/auth/auth.controller';
 import { AuthService } from './modules/auth/auth.service';
 import { BookingsController } from './modules/bookings/bookings.controller';
@@ -32,7 +36,7 @@ import { WalletService } from './modules/wallet/wallet.service';
 
 @Module({
   imports: [JwtModule.register({ global: true, secret: process.env.JWT_SECRET })],
-  controllers: [AuthController, HomeController, ShopController, BookingsController, MoneyController, MoreController, PartnerController],
+  controllers: [AuthController, HomeController, ShopController, BookingsController, MoneyController, MoreController, PartnerController, AdminController],
   providers: [
     PrismaService,
     LedgerService,
@@ -52,6 +56,9 @@ import { WalletService } from './modules/wallet/wallet.service';
     PartnerService,
     JobsService,
     CatalogService,
+    SettingsService,
+    AdminService,
+    AdminOpsService,
     { provide: APP_GUARD, useClass: AuthGuard },
     { provide: APP_FILTER, useClass: ErrorFilter },
   ],

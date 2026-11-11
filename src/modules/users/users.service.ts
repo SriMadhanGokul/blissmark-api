@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import type { Language } from '@prisma/client';
 
-import { invalid, notFound } from '../../common/errors';
+import { invalid, notFound, unauthorized } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 
 export type UserDto = {
@@ -26,6 +26,7 @@ export class UsersService {
       include: { member: { include: { sponsor: { include: { user: true } } } } },
     });
     if (!u) throw notFound('User');
+    if (u.blocked) throw unauthorized(); // ends existing sessions of blocked accounts
     return {
       id: u.id,
       phone: u.phone,

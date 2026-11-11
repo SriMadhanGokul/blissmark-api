@@ -4,7 +4,8 @@ import type { Vendor } from '@prisma/client';
 import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
-import { COMMISSION_PCT, GST_PCT } from '../bookings/bookings.service';
+import { SettingsService } from '../admin/settings.service';
+import { GST_PCT } from '../bookings/bookings.service';
 import { FoodService, RIDER_PAY } from '../food/food.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ShopService } from '../shop/shop.service';
@@ -47,9 +48,9 @@ const ACTIVE: Record<JobKind, string[]> = {
 
 const IST = { timeZone: 'Asia/Kolkata' } as const;
 const masked = (phone?: string | null) => (phone ? `+91 ${phone.slice(0, 2)}••••${phone.slice(-4)}` : null);
-const share = (amount: number) => amount - Math.round((amount * COMMISSION_PCT) / 100);
+const share = (amount: number, pct: number) => amount - Math.round((amount * pct) / 100);
 /** What the pro keeps from an invoice: commission is taken on the pre-GST subtotal (same as BookingsService.pay). */
-const invoiceShare = (inv: { total: number; subtotal: number }) => inv.total - Math.round((inv.subtotal * COMMISSION_PCT) / 100);
+const invoiceShare = (inv: { total: number; subtotal: number }, pct: number) => inv.total - Math.round((inv.subtotal * pct) / 100);
 const cleanLines = (lines?: Line[]) => {
   const out = (lines ?? []).filter((l) => l?.label?.trim() && Number.isInteger(l.amount) && l.amount > 0).map((l) => ({ label: l.label.trim(), amount: l.amount }));
   if (!out.length) throw invalid('LINES', 'Add at least one item with an amount', 'lines');
@@ -65,6 +66,7 @@ export class JobsService {
     private notifications: NotificationsService,
     private food: FoodService,
     private shop: ShopService,
+    private settings: SettingsService,
   ) {}
 
   /** Within the partner's working days and hours (India time)? */
@@ -87,24 +89,25 @@ export class JobsService {
     const notDeclined = { NOT: { declinedBy: { has: v.id } } };
     const fresh = new Date(Date.now() - 6 * 3600000);
     const kind = KIND_OF[v.category];
+    const pct = await this.settings.commissionFor(v);
     let offers: ReturnType<JobsService['summary']>[] = [];
     if (kind === 'booking') {
       const list = await this.prisma.booking.findMany({ where: { status: 'BROADCASTING', serviceCode: { in: v.services }, createdAt: { gte: fresh }, ...notDeclined }, include: { service: true }, orderBy: { createdAt: 'desc' } });
-      offers = list.filter((b) => !v.pincodes.length || v.pincodes.includes((b.address as Place).pincode ?? '')).map((b) => this.summary('booking', b));
+      offers = list.filter((b) => !v.pincodes.length || v.pincodes.includes((b.address as Place).pincode ?? '')).map((b) => this.summary('booking', b, pct));
     } else if (kind === 'ride') {
       const types = v.services.filter((s) => s.startsWith('cab:')).map((s) => s.slice(4));
       const list = await this.prisma.ride.findMany({ where: { status: 'SEARCHING', vehicle: { in: types }, createdAt: { gte: fresh }, ...notDeclined }, orderBy: { createdAt: 'desc' } });
-      offers = list.map((r) => this.summary('ride', r));
+      offers = list.map((r) => this.summary('ride', r, pct));
     } else if (kind === 'delivery') {
       const list = await this.prisma.foodOrder.findMany({ where: { status: 'PREPARING', OR: [{ riderId: null }, { riderId: { isSet: false } }], createdAt: { gte: fresh }, ...notDeclined }, orderBy: { createdAt: 'desc' } });
-      offers = list.map((o) => this.summary('delivery', o));
+      offers = list.map((o) => this.summary('delivery', o, pct));
     } else if (kind === 'sos') {
       const type = v.services.includes('ambulance') ? 'health' : 'highway';
       const list = await this.prisma.sosRequest.findMany({ where: { status: 'ALERTED', type, createdAt: { gte: fresh }, ...notDeclined }, orderBy: { createdAt: 'desc' } });
-      offers = list.map((s) => this.summary('sos', s));
+      offers = list.map((s) => this.summary('sos', s, pct));
     } else if (kind === 'kitchen' && v.restaurantId) {
       const list = await this.prisma.foodOrder.findMany({ where: { status: 'PLACED', restaurantId: v.restaurantId }, orderBy: { createdAt: 'desc' } });
-      offers = list.map((o) => this.summary('kitchen', o));
+      offers = list.map((o) => this.summary('kitchen', o, pct));
     }
     return { online: v.online, onShift: this.onShift(v), offers };
   }
@@ -180,47 +183,48 @@ export class JobsService {
   async jobs(userId: string, scope: 'active' | 'done') {
     const v = await this.partner.vendor(userId);
     const kind = KIND_OF[v.category];
+    const pct = await this.settings.commissionFor(v);
     const active = ACTIVE[kind];
     const status = scope === 'active' ? { in: active } : { notIn: [...active, ...(kind === 'kitchen' ? ['PLACED'] : [])] };
     const take = 50;
     switch (kind) {
       case 'booking':
-        return (await this.prisma.booking.findMany({ where: { vendorId: v.id, status }, include: { service: true }, orderBy: { updatedAt: 'desc' }, take })).map((b) => this.summary('booking', b));
+        return (await this.prisma.booking.findMany({ where: { vendorId: v.id, status }, include: { service: true }, orderBy: { updatedAt: 'desc' }, take })).map((b) => this.summary('booking', b, pct));
       case 'ride':
-        return (await this.prisma.ride.findMany({ where: { driverId: v.id, status }, orderBy: { updatedAt: 'desc' }, take })).map((r) => this.summary('ride', r));
+        return (await this.prisma.ride.findMany({ where: { driverId: v.id, status }, orderBy: { updatedAt: 'desc' }, take })).map((r) => this.summary('ride', r, pct));
       case 'delivery':
-        return (await this.prisma.foodOrder.findMany({ where: { riderId: v.id, status }, orderBy: { updatedAt: 'desc' }, take })).map((o) => this.summary('delivery', o));
+        return (await this.prisma.foodOrder.findMany({ where: { riderId: v.id, status }, orderBy: { updatedAt: 'desc' }, take })).map((o) => this.summary('delivery', o, pct));
       case 'kitchen':
-        return (await this.prisma.foodOrder.findMany({ where: { restaurantId: v.restaurantId ?? '-', status }, orderBy: { updatedAt: 'desc' }, take })).map((o) => this.summary('kitchen', o));
+        return (await this.prisma.foodOrder.findMany({ where: { restaurantId: v.restaurantId ?? '-', status }, orderBy: { updatedAt: 'desc' }, take })).map((o) => this.summary('kitchen', o, pct));
       case 'sos':
-        return (await this.prisma.sosRequest.findMany({ where: { responderId: v.id, status }, orderBy: { updatedAt: 'desc' }, take })).map((s) => this.summary('sos', s));
+        return (await this.prisma.sosRequest.findMany({ where: { responderId: v.id, status }, orderBy: { updatedAt: 'desc' }, take })).map((s) => this.summary('sos', s, pct));
       case 'order': {
         const sellerName = await this.sellerName(v);
-        return (await this.prisma.order.findMany({ where: { sellerName: sellerName ?? '-', status }, orderBy: { placedAt: 'desc' }, take })).map((o) => this.summary('order', o));
+        return (await this.prisma.order.findMany({ where: { sellerName: sellerName ?? '-', status }, orderBy: { placedAt: 'desc' }, take })).map((o) => this.summary('order', o, pct));
       }
       case 'visit': {
         const props = await this.prisma.property.findMany({ where: { agentId: v.id }, select: { id: true } });
         const list = await this.prisma.enquiry.findMany({ where: { propertyId: { in: props.map((p) => p.id) }, status }, include: { property: true, user: true }, orderBy: { createdAt: 'desc' }, take });
-        return list.map((e) => this.summary('visit', e));
+        return list.map((e) => this.summary('visit', e, pct));
       }
     }
   }
 
   // Summaries take loosely typed rows: each kind reads only its own fields.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  summary(kind: JobKind, x: any) {
+  summary(kind: JobKind, x: any, pct = 15) {
     const [label, tone] = LABEL[kind][x.status] ?? [x.status, 'neutral' as Tone];
     const base = { kind, id: x.id as string, status: x.status as string, label, tone, createdAt: (x.createdAt ?? x.placedAt) as Date };
     switch (kind) {
       case 'booking':
         // before the invoice: visit charge plus any estimate lines, before GST
-        return { ...base, title: `${x.service.label} · ${x.issue}`, subtitle: `${x.address.line1}, ${x.address.city}`, when: x.urgency === 'now' ? null : x.scheduledAt, amount: x.invoice ? invoiceShare(x.invoice) : share(x.service.visitCharge + (x.quote?.lines ?? []).reduce((s: number, l: Line) => s + l.amount, 0)), estimate: !x.invoice };
+        return { ...base, title: `${x.service.label} · ${x.issue}`, subtitle: `${x.address.line1}, ${x.address.city}`, when: x.urgency === 'now' ? null : x.scheduledAt, amount: x.invoice ? invoiceShare(x.invoice, pct) : share(x.service.visitCharge + (x.quote?.lines ?? []).reduce((s: number, l: Line) => s + l.amount, 0), pct), estimate: !x.invoice };
       case 'ride':
-        return { ...base, title: `${x.pickup.label} → ${x.drop.label}`, subtitle: `${x.distanceKm} km · ${x.durationMin} min · ${x.paymentMethod === 'cash' ? 'Cash' : 'Online'}`, when: null, amount: share(x.fare.total), estimate: false };
+        return { ...base, title: `${x.pickup.label} → ${x.drop.label}`, subtitle: `${x.distanceKm} km · ${x.durationMin} min · ${x.paymentMethod === 'cash' ? 'Cash' : 'Online'}`, when: null, amount: share(x.fare.total, pct), estimate: false };
       case 'delivery':
         return { ...base, title: `Pick up from ${x.restaurantName}`, subtitle: `Drop: ${x.address.line1}, ${x.address.city}`, when: null, amount: RIDER_PAY, estimate: false };
       case 'kitchen':
-        return { ...base, title: `#${x.id} · ${x.items.reduce((s: number, i: { qty: number }) => s + i.qty, 0)} item(s)`, subtitle: x.items.map((i: { qty: number; name: string }) => `${i.qty}× ${i.name}`).join(', '), when: x.scheduledAt ?? null, amount: x.total - Math.round(x.subtotal * 0.15), estimate: false };
+        return { ...base, title: `#${x.id} · ${x.items.reduce((s: number, i: { qty: number }) => s + i.qty, 0)} item(s)`, subtitle: x.items.map((i: { qty: number; name: string }) => `${i.qty}× ${i.name}`).join(', '), when: x.scheduledAt ?? null, amount: x.total - (x.commission ?? Math.round(x.subtotal * 0.15)), estimate: false };
       case 'sos':
         return { ...base, title: `${x.type === 'health' ? 'Health' : 'Highway'} SOS · ${x.issue}`, subtitle: x.location.label, when: null, amount: x.invoice?.total ?? (PRICE[x.type === 'health' ? 'health' : x.issue] ?? []).reduce((s, l) => s + l.amount, 0), estimate: !x.invoice };
       case 'order':
@@ -235,6 +239,7 @@ export class JobsService {
   async job(userId: string, kind: JobKind, id: string) {
     const v = await this.partner.vendor(userId);
     if (KIND_OF[v.category] !== kind) throw notFound('Job');
+    const pct = await this.settings.commissionFor(v);
     const mine = (owner: string | null | undefined) => owner === v.id;
     const customer = (u: { name: string | null; phone: string }) => ({ name: u.name ?? 'Customer', phone: masked(u.phone) });
 
@@ -252,7 +257,7 @@ export class JobsService {
       if (b.status === 'QUOTE_APPROVED') actions.push({ id: 'complete', label: 'Mark work completed', tone: 'primary' });
       if (b.status === 'COMPLETED') actions.push({ id: 'invoice', label: 'Send invoice', tone: 'primary', input: 'lines' });
       return {
-        ...this.summary('booking', b),
+        ...this.summary('booking', b, pct),
         customer: mine(b.vendorId) ? customer(b.user) : null,
         location: b.address as Place,
         description: b.description,
@@ -274,7 +279,7 @@ export class JobsService {
       if (r.status === 'ARRIVING') actions.push({ id: 'start', label: 'Start trip · enter OTP', tone: 'primary', input: 'otp', hint: 'Ask the rider for their 4-digit ride OTP' }, { id: 'cancel', label: 'Cancel ride', tone: 'danger' });
       if (r.status === 'ON_TRIP') actions.push({ id: 'complete', label: 'End trip', tone: 'primary' });
       return {
-        ...this.summary('ride', r),
+        ...this.summary('ride', r, pct),
         customer: mine(r.driverId) ? customer(r.user) : null,
         location: r.status === 'ON_TRIP' ? (r.drop as Place) : (r.pickup as Place),
         stops: [r.pickup as Place, r.drop as Place],
@@ -318,7 +323,7 @@ export class JobsService {
       if (s.status === 'EN_ROUTE') actions.push({ id: 'arrive', label: 'Reached the location', tone: 'primary' });
       if (s.status === 'ARRIVED') actions.push({ id: 'resolve', label: 'Resolved · send bill', tone: 'primary', input: 'lines' });
       return {
-        ...this.summary('sos', s),
+        ...this.summary('sos', s, pct),
         customer: mine(s.responderId) ? customer(s.user) : null,
         location: s.location as Place,
         description: s.note,
@@ -336,7 +341,7 @@ export class JobsService {
       if (o.status === 'PLACED') actions.push({ id: 'pack', label: 'Mark packed', tone: 'primary' }, { id: 'cancel', label: 'Cancel order', tone: 'danger' });
       if (o.status === 'PACKED') actions.push({ id: 'ship', label: 'Hand over to courier', tone: 'primary' }, { id: 'cancel', label: 'Cancel order', tone: 'danger' });
       return {
-        ...this.summary('order', o),
+        ...this.summary('order', o, pct),
         customer: customer(o.user),
         location: o.address as Place,
         items: items.map((i) => ({ name: `${i.title}${i.colour ? ` · ${i.colour}` : ''}`, qty: i.qty, amount: i.price * i.qty, photo: i.photo })),
@@ -352,7 +357,7 @@ export class JobsService {
     if (!e || e.property.agentId !== v.id) throw notFound('Enquiry');
     const actions: Action[] = e.status === 'REQUESTED' ? [{ id: 'confirm', label: e.visitAt ? 'Confirm this visit' : 'Reply to enquiry', tone: 'primary', input: 'note' }, { id: 'reschedule', label: 'Propose another time', tone: 'secondary', input: 'datetime' }] : [];
     return {
-      ...this.summary('visit', e),
+      ...this.summary('visit', e, pct),
       customer: customer(e.user),
       location: { label: e.property.title, line1: e.property.locality, city: e.property.city },
       description: e.message,

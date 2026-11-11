@@ -11,6 +11,7 @@ export class AppError extends HttpException {
 export const invalid = (code: string, message: string, field?: string) =>
   new AppError(HttpStatus.UNPROCESSABLE_ENTITY, code, message, field ? { [field]: message } : undefined);
 export const notFound = (what: string) => new AppError(HttpStatus.NOT_FOUND, 'NOT_FOUND', `${what} not found`);
+export const forbidden = () => new AppError(HttpStatus.FORBIDDEN, 'FORBIDDEN', 'Your role does not allow this.');
 export const unauthorized = () => new AppError(HttpStatus.UNAUTHORIZED, 'AUTH', 'Your session has ended. Please sign in again.');
 
 @Catch()

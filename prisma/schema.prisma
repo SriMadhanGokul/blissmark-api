@@ -22,6 +22,7 @@ model User {
   city          String         @default("Jaipur")
   language      Language       @default(en)
   kycVerified   Boolean        @default(false)
+  blocked       Boolean        @default(false)
   coupon        String?
   createdAt     DateTime       @default(now())
   member        Member?
@@ -225,6 +226,9 @@ model Vendor {
   accepted     Int            @default(0)
   declined     Int            @default(0)
   cancelled    Int            @default(0)
+  commissionPct Float?
+  rejectReason String?
+  warnings     Json           @default("[]")
   submittedAt  DateTime?
   createdAt    DateTime       @default(now())
   docs         VendorDoc[]
@@ -241,6 +245,7 @@ model VendorDoc {
   number    String?
   image     String?
   status    String   @default("submitted")
+  note      String?
   createdAt DateTime @default(now())
 
   @@index([vendorId])
@@ -266,6 +271,7 @@ model SupportTicket {
   message   String
   status    String   @default("open")
   reply     String?
+  repliedAt DateTime?
   createdAt DateTime @default(now())
 
   @@index([vendorId])
@@ -383,6 +389,7 @@ model FoodOrder {
   taxes          Int
   deliveryFee    Int
   total          Int
+  commission     Int?
   paymentMethod  String
   address        Json
   scheduledAt    DateTime?
@@ -436,6 +443,7 @@ model Property {
   agentRating Float
   agentId     String?
   status      String      @default("active")
+  featured    Boolean     @default(false)
   verified    Boolean     @default(true)
   listedAt    DateTime    @default(now())
   shortlists  Shortlist[]
@@ -547,4 +555,36 @@ model Notification {
   createdAt DateTime  @default(now())
 
   @@index([userId])
+}
+
+/// Back-office staff. Separate from members; signs in to the admin panel with email + password.
+model Admin {
+  id           String    @id @default(cuid()) @map("_id")
+  email        String    @unique
+  name         String
+  role         String // owner | ops | support | finance
+  passwordHash String
+  active       Boolean   @default(true)
+  lastLoginAt  DateTime?
+  createdAt    DateTime  @default(now())
+}
+
+/// Every admin write is recorded here.
+model AuditLog {
+  id        String   @id @default(cuid()) @map("_id")
+  adminId   String
+  adminName String
+  action    String
+  target    String
+  detail    Json?
+  createdAt DateTime @default(now())
+
+  @@index([createdAt])
+}
+
+/// Admin-editable platform configuration (commission rates, income plan, banners, zones, legal pages).
+model Setting {
+  key       String   @id @map("_id")
+  value     Json
+  updatedAt DateTime @updatedAt
 }

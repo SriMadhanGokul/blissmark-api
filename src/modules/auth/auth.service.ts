@@ -59,6 +59,7 @@ export class AuthService {
     }
     await this.prisma.otp.delete({ where: { id: p } });
     const user = await this.prisma.user.findUnique({ where: { phone: p }, include: { member: true } });
+    if (user?.blocked) throw invalid('BLOCKED', 'This account is blocked. Contact Blissmark support.', 'phone');
     if (user?.member) return { status: 'existing' as const, token: this.token(user.id), user: await this.users.dto(user.id) };
     return { status: 'new' as const, signupToken: this.jwt.sign({ phone: p, purpose: 'signup' }, { expiresIn: '15m' }) };
   }

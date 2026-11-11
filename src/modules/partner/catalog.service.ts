@@ -172,7 +172,7 @@ export class CatalogService {
         agentName: v.businessName ?? v.name,
         agentRating: v.rating,
         agentId: v.id,
-        verified: v.status === 'approved',
+        verified: false, // enters the admin moderation queue
         status: 'active',
       },
     });

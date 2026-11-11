@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { APP_PRIORITY_S, SIM_VENDOR, alertOwner, alertVendors, appVendorsOnline, isAppVendor } from '../partner/dispatch';
+import { SettingsService } from '../admin/settings.service';
 import { LedgerService } from '../wallet/ledger.service';
 
 const TAX_PCT = 5;
@@ -33,6 +34,7 @@ export class FoodService {
     private prisma: PrismaService,
     private ledger: LedgerService,
     private notifications: NotificationsService,
+    private settings: SettingsService,
   ) {}
 
   restaurants(kind?: string, q?: string) {
@@ -74,6 +76,8 @@ export class FoodService {
     const deliveryFee = subtotal >= FREE_DELIVERY_FROM ? 0 : DELIVERY_FEE;
     const total = subtotal + taxes + deliveryFee;
     const id = `FD${digits(5)}`;
+    const kitchen = await this.prisma.vendor.findFirst({ where: { restaurantId: r.id } });
+    const commission = await this.settings.commissionOn(kitchen ?? { category: 'restaurant', commissionPct: null }, subtotal);
 
     await this.prisma.$transaction(async (tx) => {
       const source = b.paymentMethod === 'wallet' ? await this.ledger.spendLines(tx, userId, total) : [{ kind: 'gateway_clearing' as const, debit: total }];
@@ -90,6 +94,7 @@ export class FoodService {
           taxes,
           deliveryFee,
           total,
+          commission,
           paymentMethod: b.paymentMethod,
           address: { label: address.label, line1: address.line1, city: address.city, pincode: address.pincode },
           scheduledAt,
@@ -97,7 +102,6 @@ export class FoodService {
           events: [{ status: 'PLACED', at: new Date() }],
         },
       });
-      const commission = Math.round(subtotal * 0.15);
       await this.ledger.post(tx, { type: 'food', title: r.name, ref: id, key: `food:${id}:pay` }, [
         ...source,
         { kind: 'vendor_earnings', ownerId: `restaurant:${r.id}`, credit: total - commission },
@@ -168,12 +172,13 @@ export class FoodService {
   }
 
   /** Cancels a placed order and returns the money to the customer's wallet (customer or kitchen). */
-  async refund(o: { id: string; userId: string; restaurantId: string; restaurantName: string; total: number; subtotal: number }, title: string) {
+  async refund(o: { id: string; userId: string; restaurantId: string; restaurantName: string; total: number; subtotal: number; commission?: number | null }, title: string) {
     const { id, userId } = o;
+    const commission = o.commission ?? Math.round(o.subtotal * 0.15); // orders before configurable commission used 15%
     await this.prisma.$transaction(async (tx) => {
       await this.ledger.post(tx, { type: 'refund', title: `Refund: ${o.restaurantName}`, ref: id, key: `food:${id}:refund` }, [
-        { kind: 'vendor_earnings', ownerId: `restaurant:${o.restaurantId}`, debit: o.total - Math.round(o.subtotal * 0.15) },
-        { kind: 'platform_commission', debit: Math.round(o.subtotal * 0.15) },
+        { kind: 'vendor_earnings', ownerId: `restaurant:${o.restaurantId}`, debit: o.total - commission },
+        { kind: 'platform_commission', debit: commission },
         { kind: 'wallet_withdrawable', ownerId: userId, credit: o.total },
       ]);
     });

@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline } from '../partner/dispatch';
+import { SettingsService } from '../admin/settings.service';
 import { LedgerService } from '../wallet/ledger.service';
 
 export const COMMISSION_PCT = 15;
@@ -34,6 +35,7 @@ export class BookingsService {
     private prisma: PrismaService,
     private ledger: LedgerService,
     private notifications: NotificationsService,
+    private settings: SettingsService,
   ) {}
 
   services() {
@@ -194,7 +196,8 @@ export class BookingsService {
     if (b.status !== 'INVOICED' || !b.invoice) throw invalid('NOT_PAYABLE', 'There is no invoice to pay yet');
     const total = (b.invoice as { total: number }).total;
     const subtotal = (b.invoice as { subtotal: number }).subtotal;
-    const commission = Math.round((subtotal * COMMISSION_PCT) / 100);
+    const vendor = b.vendorId ? await this.prisma.vendor.findUnique({ where: { id: b.vendorId } }) : null;
+    const commission = await this.settings.commissionOn(vendor, subtotal);
     await this.prisma.$transaction(async (tx) => {
       const source = method === 'wallet' ? await this.ledger.spendLines(tx, userId, total) : [{ kind: 'gateway_clearing' as const, debit: total }];
       if (!source.length) throw invalid('WALLET_LOW', 'Your wallet balance is not enough', 'payment');

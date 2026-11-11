@@ -5,6 +5,7 @@ import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
 import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline, isAppVendor } from '../partner/dispatch';
+import { SettingsService } from '../admin/settings.service';
 import { LedgerService } from '../wallet/ledger.service';
 
 export type Place = { label: string; line1: string; lat: number; lng: number };
@@ -52,6 +53,7 @@ export class RidesService {
     private prisma: PrismaService,
     private ledger: LedgerService,
     private notifications: NotificationsService,
+    private settings: SettingsService,
   ) {}
 
   async places(userId: string) {
@@ -170,7 +172,8 @@ export class RidesService {
       if (method !== 'cash') {
         const source = method === 'wallet' ? await this.ledger.spendLines(tx, userId, total) : [{ kind: 'gateway_clearing' as const, debit: total }];
         if (!source.length) throw invalid('WALLET_LOW', 'Your wallet balance is not enough', 'payment');
-        const commission = Math.round(total * 0.15);
+        const driver = r.driverId ? await this.prisma.vendor.findUnique({ where: { id: r.driverId } }) : null;
+        const commission = await this.settings.commissionOn(driver ?? { category: 'driver', commissionPct: null }, total);
         await this.ledger.post(tx, { type: 'ride', title: 'Cab ride', ref: id, key: `ride:${id}:pay` }, [
           ...source,
           { kind: 'vendor_earnings', ownerId: r.driverId ?? `driver:${(r.driver as { name?: string } | null)?.name ?? 'unknown'}`, credit: total - commission },
