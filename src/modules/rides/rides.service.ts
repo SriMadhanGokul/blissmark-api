@@ -4,7 +4,7 @@ import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
-import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline, isAppVendor } from '../partner/dispatch';
+import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline, applyRating, isAppVendor } from '../partner/dispatch';
 import { SettingsService } from '../admin/settings.service';
 import { LedgerService } from '../wallet/ledger.service';
 
@@ -182,6 +182,7 @@ export class RidesService {
       }
     });
     await this.step(id, 'PAID', { paymentMethod: method });
+    if (r.driverId) await this.prisma.vendor.update({ where: { id: r.driverId }, data: { jobs: { increment: 1 } } });
     return this.get(userId, id);
   }
 
@@ -189,10 +190,7 @@ export class RidesService {
     const r = await this.get(userId, id);
     if (r.status !== 'PAID') throw invalid('NOT_RATEABLE', 'You can rate after paying');
     await this.prisma.ride.update({ where: { id }, data: { rating } });
-    if (r.driverId) {
-      const v = await this.prisma.vendor.findUniqueOrThrow({ where: { id: r.driverId } });
-      await this.prisma.vendor.update({ where: { id: v.id }, data: { jobs: v.jobs + 1, rating: Math.round(((v.rating * v.jobs + rating) / (v.jobs + 1)) * 10) / 10 } });
-    }
+    if (r.driverId) await applyRating(this.prisma, r.driverId, rating);
     return this.get(userId, id);
   }
 }

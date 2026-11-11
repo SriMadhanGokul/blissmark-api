@@ -4,7 +4,7 @@ import { invalid, notFound } from '../../common/errors';
 import { PrismaService } from '../../common/prisma.service';
 import { digits } from '../../common/util';
 import { NotificationsService } from '../notifications/notifications.service';
-import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline } from '../partner/dispatch';
+import { APP_PRIORITY_S, SIM_VENDOR, alertVendors, appVendorsOnline, applyRating } from '../partner/dispatch';
 import { SettingsService } from '../admin/settings.service';
 import { LedgerService } from '../wallet/ledger.service';
 
@@ -207,6 +207,7 @@ export class BookingsService {
         { kind: 'platform_commission', credit: commission },
       ]);
       await tx.booking.update({ where: { id }, data: { status: 'PAID', events: { create: { status: 'PAID' } } } });
+      if (b.vendorId) await tx.vendor.update({ where: { id: b.vendorId }, data: { jobs: { increment: 1 } } });
       await this.notifications.notify(userId, 'booking', 'Payment received', `₹${total / 100} paid for #${id}. Thank you!`, `/booking/${id}`, tx);
     });
     return this.get(userId, id);
@@ -216,10 +217,7 @@ export class BookingsService {
     const b = await this.get(userId, id);
     if (b.status !== 'PAID') throw invalid('NOT_RATEABLE', 'You can rate after paying');
     await this.step(id, 'CLOSED', { rating, review });
-    if (b.vendorId) {
-      const v = await this.prisma.vendor.findUniqueOrThrow({ where: { id: b.vendorId } });
-      await this.prisma.vendor.update({ where: { id: v.id }, data: { jobs: v.jobs + 1, rating: Math.round(((v.rating * v.jobs + rating) / (v.jobs + 1)) * 10) / 10 } });
-    }
+    if (b.vendorId) await applyRating(this.prisma, b.vendorId, rating);
     return this.get(userId, id);
   }
 }

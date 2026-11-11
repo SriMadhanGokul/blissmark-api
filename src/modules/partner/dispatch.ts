@@ -42,3 +42,18 @@ export async function alertOwner(prisma: PrismaService, notifications: Notificat
 export function withEvent(events: unknown, status: string) {
   return [...((events as { status: string; at: string }[]) ?? []), { status, at: new Date() }];
 }
+
+/**
+ * Completed jobs count at payment; the rating is a running average over rated jobs.
+ * App partners average their real ratings; seeded providers keep their seeded weight.
+ */
+export async function applyRating(prisma: PrismaService, vendorId: string, rating: number) {
+  const v = await prisma.vendor.findUniqueOrThrow({ where: { id: vendorId } });
+  const [b, r] = await Promise.all([
+    prisma.booking.count({ where: { vendorId, rating: { not: null } } }),
+    prisma.ride.count({ where: { driverId: vendorId, rating: { not: null } } }),
+  ]);
+  const prior = v.userId ? b + r - 1 : v.jobs; // this rating is already saved
+  const next = prior > 0 ? (v.rating * prior + rating) / (prior + 1) : rating;
+  await prisma.vendor.update({ where: { id: vendorId }, data: { rating: Math.round(next * 10) / 10 } });
+}
