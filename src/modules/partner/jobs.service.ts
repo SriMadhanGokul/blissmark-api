@@ -48,6 +48,8 @@ const ACTIVE: Record<JobKind, string[]> = {
 const IST = { timeZone: 'Asia/Kolkata' } as const;
 const masked = (phone?: string | null) => (phone ? `+91 ${phone.slice(0, 2)}••••${phone.slice(-4)}` : null);
 const share = (amount: number) => amount - Math.round((amount * COMMISSION_PCT) / 100);
+/** What the pro keeps from an invoice: commission is taken on the pre-GST subtotal (same as BookingsService.pay). */
+const invoiceShare = (inv: { total: number; subtotal: number }) => inv.total - Math.round((inv.subtotal * COMMISSION_PCT) / 100);
 const cleanLines = (lines?: Line[]) => {
   const out = (lines ?? []).filter((l) => l?.label?.trim() && Number.isInteger(l.amount) && l.amount > 0).map((l) => ({ label: l.label.trim(), amount: l.amount }));
   if (!out.length) throw invalid('LINES', 'Add at least one item with an amount', 'lines');
@@ -211,7 +213,8 @@ export class JobsService {
     const base = { kind, id: x.id as string, status: x.status as string, label, tone, createdAt: (x.createdAt ?? x.placedAt) as Date };
     switch (kind) {
       case 'booking':
-        return { ...base, title: `${x.service.label} · ${x.issue}`, subtitle: `${x.address.line1}, ${x.address.city}`, when: x.urgency === 'now' ? null : x.scheduledAt, amount: x.invoice ? share(x.invoice.total) : share(x.service.visitCharge), estimate: !x.invoice };
+        // before the invoice: visit charge plus any estimate lines, before GST
+        return { ...base, title: `${x.service.label} · ${x.issue}`, subtitle: `${x.address.line1}, ${x.address.city}`, when: x.urgency === 'now' ? null : x.scheduledAt, amount: x.invoice ? invoiceShare(x.invoice) : share(x.service.visitCharge + (x.quote?.lines ?? []).reduce((s: number, l: Line) => s + l.amount, 0)), estimate: !x.invoice };
       case 'ride':
         return { ...base, title: `${x.pickup.label} → ${x.drop.label}`, subtitle: `${x.distanceKm} km · ${x.durationMin} min · ${x.paymentMethod === 'cash' ? 'Cash' : 'Online'}`, when: null, amount: share(x.fare.total), estimate: false };
       case 'delivery':
