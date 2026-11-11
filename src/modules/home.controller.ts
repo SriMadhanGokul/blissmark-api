@@ -29,7 +29,7 @@ export class HomeController {
       this.users.defaultAddress(userId),
       this.ledger.walletBalance(userId),
       this.notifications.unread(userId),
-      this.prisma.service.findMany({ orderBy: { sort: 'asc' } }),
+      this.prisma.service.findMany({ where: { live: true }, orderBy: { sort: 'asc' } }),
       this.activity.live(userId),
       this.income.repurchase(userId),
       this.settings.get('shopBanner'),
@@ -58,7 +58,7 @@ export class HomeController {
     if (term.length < 2) return { products: [], services: [] };
     const [products, services] = await Promise.all([
       this.prisma.product.findMany({ where: { OR: [{ title: { contains: term, mode: 'insensitive' } }, { brand: { contains: term, mode: 'insensitive' } }] }, take: 12 }),
-      this.prisma.service.findMany({ where: { OR: [{ label: { contains: term, mode: 'insensitive' } }, { issues: { has: term } }] } }),
+      this.prisma.service.findMany({ where: { live: true, OR: [{ label: { contains: term, mode: 'insensitive' } }, { issues: { has: term } }] } }),
     ]);
     return { products, services };
   }

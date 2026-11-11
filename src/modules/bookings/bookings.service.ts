@@ -39,7 +39,7 @@ export class BookingsService {
   ) {}
 
   services() {
-    return this.prisma.service.findMany({ orderBy: { sort: 'asc' } });
+    return this.prisma.service.findMany({ where: { live: true }, orderBy: { sort: 'asc' } });
   }
 
   async service(code: string) {
