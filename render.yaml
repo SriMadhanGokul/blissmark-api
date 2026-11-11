@@ -16,5 +16,7 @@ services:
         value: "482193"
       - key: DATABASE_URL
         sync: false
+      - key: PUBLIC_API_URL
+        value: https://blissmark-api.onrender.com/v1
       - key: MONGODB_URI
         sync: false

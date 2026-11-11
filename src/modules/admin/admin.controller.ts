@@ -1,9 +1,14 @@
-import { Body, Controller, Get, Header, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Header, Headers, Param, Patch, Post, Query, Res, UploadedFile, UseInterceptors } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
+import { memoryStorage } from 'multer';
 import { Allow, IsArray, IsBoolean, IsIn, IsInt, IsNumber, IsOptional, IsString } from 'class-validator';
 
 import { AdminId, AdminOnly, Public } from '../../common/auth';
 import { AdminOpsService, type QueueKind } from './admin-ops.service';
 import { AdminService } from './admin.service';
+import { ContentService } from './content.service';
+import { MAX_UPLOAD, MediaService } from './media.service';
 
 const KINDS: QueueKind[] = ['order', 'booking', 'ride', 'food', 'sos'];
 const kind = (k: string) => (KINDS.includes(k as QueueKind) ? (k as QueueKind) : 'order');
@@ -58,21 +63,12 @@ class CategoryDto {
   @IsString() photo!: string;
   @IsOptional() @IsInt() sort?: number;
 }
-class ServiceDto {
-  @IsOptional() @IsInt() visitCharge?: number;
-  @IsOptional() @IsBoolean() live?: boolean;
-  @IsOptional() @IsBoolean() requiresQuote?: boolean;
-  @IsOptional() @IsArray() @IsString({ each: true }) issues?: string[];
-}
 class CouponDto {
   @IsString() code!: string;
   @IsString() description!: string;
   @IsInt() percent!: number;
   @IsInt() maxDiscount!: number;
   @IsInt() minOrder!: number;
-  @IsBoolean() active!: boolean;
-}
-class ActiveDto {
   @IsBoolean() active!: boolean;
 }
 class SettingDto {
@@ -87,6 +83,62 @@ class StaffEditDto {
   @IsOptional() @IsString() role?: string;
   @IsOptional() @IsBoolean() active?: boolean;
 }
+class ServiceInDto {
+  @Allow() code?: string;
+  @Allow() label?: string;
+  @Allow() photo?: string;
+  @Allow() issues?: string[];
+  @Allow() visitCharge?: number;
+  @Allow() requiresQuote?: boolean;
+  @Allow() live?: boolean;
+  @Allow() sort?: number;
+}
+class ProductInDto {
+  @Allow() title?: string;
+  @Allow() brand?: string | null;
+  @Allow() description?: string;
+  @Allow() categoryId?: string;
+  @Allow() sellerId?: string;
+  @Allow() price?: number;
+  @Allow() mrp?: number;
+  @Allow() stock?: number;
+  @Allow() photos?: string[];
+  @Allow() trending?: boolean;
+  @Allow() active?: boolean;
+}
+class RestaurantInDto {
+  @Allow() name?: string;
+  @Allow() kind?: string;
+  @Allow() cuisine?: string;
+  @Allow() photo?: string;
+  @Allow() locality?: string;
+  @Allow() etaMin?: number;
+  @Allow() costForTwo?: number;
+  @Allow() pureVeg?: boolean;
+  @Allow() open?: boolean;
+  @Allow() sort?: number;
+}
+class MenuInDto {
+  @Allow() section?: string;
+  @Allow() name?: string;
+  @Allow() description?: string;
+  @Allow() price?: number;
+  @Allow() veg?: boolean;
+  @Allow() bestseller?: boolean;
+  @Allow() photo?: string | null;
+  @Allow() available?: boolean;
+}
+class ListingInDto {
+  @Allow() title?: string;
+  @Allow() price?: number;
+  @Allow() description?: string;
+  @Allow() locality?: string;
+  @Allow() photos?: string[];
+  @Allow() amenities?: string[];
+}
+class MoveDto {
+  @IsIn(['up', 'down']) dir!: 'up' | 'down';
+}
 class ReplyDto {
   @IsString() reply!: string;
   @IsBoolean() close!: boolean;
@@ -98,6 +150,8 @@ export class AdminController {
   constructor(
     private admin: AdminService,
     private ops: AdminOpsService,
+    private content: ContentService,
+    private media: MediaService,
   ) {}
 
   @Public() @Post('auth/login') login(@Body() b: LoginDto) {
@@ -196,6 +250,14 @@ export class AdminController {
   @AdminOnly('property') @Patch('listings/:id') moderate(@AdminId() a: string, @Param('id') id: string, @Body() b: ModerateDto) {
     return this.ops.moderate(a, id, b);
   }
+  @AdminOnly('property') @Patch('listings/:id/details') async editListing(@AdminId() a: string, @Param('id') id: string, @Body() b: ListingInDto) {
+    await this.content.saveListing(a, id, b);
+    return this.ops.listings('all');
+  }
+  @AdminOnly('property') @Delete('listings/:id') async deleteListing(@AdminId() a: string, @Param('id') id: string) {
+    await this.content.deleteListing(a, id);
+    return this.ops.listings('all');
+  }
   @AdminOnly('property') @Get('enquiries') enquiries() {
     return this.ops.enquiries();
   }
@@ -207,14 +269,90 @@ export class AdminController {
   @AdminOnly('catalog') @Post('catalog/categories') category(@AdminId() a: string, @Body() b: CategoryDto) {
     return this.ops.saveCategory(a, b);
   }
-  @AdminOnly('catalog') @Patch('catalog/services/:code') service(@AdminId() a: string, @Param('code') c: string, @Body() b: ServiceDto) {
-    return this.ops.saveService(a, c, b);
+  @AdminOnly('catalog') @Post('catalog/services') async addService(@AdminId() a: string, @Body() b: ServiceInDto) {
+    await this.content.createService(a, b);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Patch('catalog/services/:code') async service(@AdminId() a: string, @Param('code') c: string, @Body() b: ServiceInDto) {
+    await this.content.updateService(a, c, b);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Post('catalog/services/:code/move') async moveService(@AdminId() a: string, @Param('code') c: string, @Body() b: MoveDto) {
+    await this.content.moveService(a, c, b.dir);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Delete('catalog/services/:code') async deleteService(@AdminId() a: string, @Param('code') c: string) {
+    await this.content.deleteService(a, c);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Delete('catalog/categories/:id') async deleteCategory(@AdminId() a: string, @Param('id') id: string) {
+    await this.content.deleteCategory(a, id);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Get('catalog/sellers') sellers() {
+    return this.content.sellers();
+  }
+  @AdminOnly('catalog') @Post('catalog/products') async addProduct(@AdminId() a: string, @Body() b: ProductInDto) {
+    await this.content.createProduct(a, b);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Delete('catalog/products/:id') async deleteProduct(@AdminId() a: string, @Param('id') id: string) {
+    await this.content.deleteProduct(a, id);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Delete('catalog/coupons/:code') async deleteCoupon(@AdminId() a: string, @Param('code') c: string) {
+    await this.content.deleteCoupon(a, c);
+    return this.ops.catalog();
+  }
+  @AdminOnly('catalog') @Get('catalog/restaurants') restaurants() {
+    return this.content.restaurants();
+  }
+  @AdminOnly('catalog') @Post('catalog/restaurants') async addRestaurant(@AdminId() a: string, @Body() b: RestaurantInDto) {
+    await this.content.saveRestaurant(a, null, b);
+    return this.content.restaurants();
+  }
+  @AdminOnly('catalog') @Patch('catalog/restaurants/:id') async editRestaurant(@AdminId() a: string, @Param('id') id: string, @Body() b: RestaurantInDto) {
+    await this.content.saveRestaurant(a, id, b);
+    return this.content.restaurants();
+  }
+  @AdminOnly('catalog') @Delete('catalog/restaurants/:id') async deleteRestaurant(@AdminId() a: string, @Param('id') id: string) {
+    await this.content.deleteRestaurant(a, id);
+    return this.content.restaurants();
+  }
+  @AdminOnly('catalog') @Post('catalog/restaurants/:id/menu') async addDish(@AdminId() a: string, @Param('id') id: string, @Body() b: MenuInDto) {
+    await this.content.saveMenuItem(a, id, null, b);
+    return this.content.restaurants();
+  }
+  @AdminOnly('catalog') @Patch('catalog/menu/:id') async editDish(@AdminId() a: string, @Param('id') id: string, @Body() b: MenuInDto) {
+    await this.content.saveMenuItem(a, '', id, b);
+    return this.content.restaurants();
+  }
+  @AdminOnly('catalog') @Delete('catalog/menu/:id') async deleteDish(@AdminId() a: string, @Param('id') id: string) {
+    await this.content.deleteMenuItem(a, id);
+    return this.content.restaurants();
+  }
+
+  // media library (images and videos for app content)
+  @AdminOnly('catalog') @Get('media') mediaList() {
+    return this.media.list();
+  }
+  @AdminOnly('catalog') @Post('media') @UseInterceptors(FileInterceptor('file', { storage: memoryStorage(), limits: { fileSize: MAX_UPLOAD } }))
+  async upload(@AdminId() a: string, @UploadedFile() file: Express.Multer.File) {
+    const me = await this.admin.me(a);
+    const item = await this.media.upload(file, me.name);
+    await this.admin.audit(a, 'media.upload', `media:${item.id}`, { name: item.name, size: item.size });
+    return item;
+  }
+  @AdminOnly('catalog') @Delete('media/:id') async deleteMedia(@AdminId() a: string, @Param('id') id: string) {
+    await this.admin.audit(a, 'media.delete', `media:${id}`);
+    return this.media.remove(id);
   }
   @AdminOnly('catalog') @Post('catalog/coupons') coupon(@AdminId() a: string, @Body() b: CouponDto) {
     return this.ops.saveCoupon(a, b);
   }
-  @AdminOnly('catalog') @Patch('catalog/products/:id') product(@AdminId() a: string, @Param('id') id: string, @Body() b: ActiveDto) {
-    return this.ops.productActive(a, id, b.active);
+  @AdminOnly('catalog') @Patch('catalog/products/:id') async product(@AdminId() a: string, @Param('id') id: string, @Body() b: ProductInDto) {
+    await this.content.updateProduct(a, id, b);
+    return this.ops.catalog();
   }
 
   // settings, staff, audit
@@ -235,5 +373,15 @@ export class AdminController {
   }
   @AdminOnly('settings') @Get('audit') audit(@Query('action') action?: string) {
     return this.ops.auditLog({ action });
+  }
+}
+
+/** Public media files referenced by app content (/v1/media/:id). */
+@Controller('media')
+export class MediaController {
+  constructor(private media: MediaService) {}
+
+  @Public() @Get(':id') file(@Param('id') id: string, @Headers('range') range: string | undefined, @Res() res: Response) {
+    return this.media.stream(id, range, res);
   }
 }

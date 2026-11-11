@@ -8,6 +8,28 @@ export const DEFAULTS = {
   commission: { service: 15, driver: 15, restaurant: 15, rider: 0, responder: 0, seller: 0, agent: 0 } as Record<string, number>,
   /** Plan A: share of monthly net profit put in the pool, % of that pool per level 1–30, and the repurchase qualification. */
   incomePlan: { poolPct: 50, levels: [10, 7, 6, 5, 4, 3, 2, 1, 1, 1, ...Array(20).fill(0.5)] as number[], threshold: 100000, subscription: 9900 },
+  /** Everything on the customer Home screen. Media fields hold an https link or a /media/:id upload. */
+  appContent: {
+    hero: { line1: 'Shop, book and', highlight: 'earn', line2: 'all in one place' },
+    searchPlaceholder: 'Search shops, services, homes',
+    slides: [
+      { id: 'welcome', type: 'image', media: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=900&q=70', chip: 'NEW MEMBER', title: 'Free delivery\nabove ₹499', subtitle: 'Verified sellers, tracked delivery', action: { kind: 'shop', target: '' }, active: true },
+    ] as Slide[],
+    emergency: [
+      { key: 'highway', title: 'Highway SOS', subtitle: 'Tow, fuel, tyre', image: 'https://images.unsplash.com/photo-1600320254374-ce2d293c324e?w=600&q=70' },
+      { key: 'health', title: 'Health SOS', subtitle: 'Ambulance now', image: 'https://images.unsplash.com/photo-1587745416684-47953f16f02f?w=600&q=70' },
+    ],
+    cab: { title: 'Book a cab', subtitle: 'Bike, auto, mini or sedan · live tracking', show: true },
+    sections: {
+      emergency: { title: 'Emergency help', badge: '24x7 · Live location', show: true },
+      services: { title: 'Book a service', show: true },
+      offers: { title: 'Offers', show: true },
+      income: { title: 'Your income plan', show: true },
+      more: { title: 'Food, rides and homes', show: true },
+    },
+  },
+  /** App name and logo shown inside the app (the installed icon and splash need a new build). */
+  branding: { appName: 'Blissmark', logo: '' },
   shopBanner: { chip: 'NEW MEMBER', title: 'Free delivery\nabove ₹499', subtitle: 'Verified sellers, tracked delivery', photo: 'https://images.unsplash.com/photo-1505740420928-5e560c06d30e?w=900&q=70' },
   zones: [{ district: 'Jaipur', pincodes: ['302001', '302004', '302015', '302017', '302018', '302020', '302021'], live: true }] as { district: string; pincodes: string[]; live: boolean }[],
   legal: { terms: 'Terms of service for Blissmark members and partners.', privacy: 'How Blissmark collects, uses and protects your data.' },
@@ -18,6 +40,8 @@ export const DEFAULTS = {
   } as Record<string, string>,
 };
 export type SettingKey = keyof typeof DEFAULTS;
+export type SlideAction = { kind: 'none' | 'shop' | 'service' | 'category' | 'product' | 'url'; target: string };
+export type Slide = { id: string; type: 'image' | 'video'; media: string; poster?: string; chip: string; title: string; subtitle: string; action: SlideAction; active: boolean };
 
 @Injectable()
 export class SettingsService {

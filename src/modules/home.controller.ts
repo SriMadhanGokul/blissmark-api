@@ -3,7 +3,7 @@ import { Controller, Get, Query } from '@nestjs/common';
 import { Public, UserId } from '../common/auth';
 import { PrismaService } from '../common/prisma.service';
 import { ActivityService } from './activity.service';
-import { SettingsService } from './admin/settings.service';
+import { DEFAULTS, SettingsService } from './admin/settings.service';
 import { IncomeService } from './income/income.service';
 import { NotificationsService } from './notifications/notifications.service';
 import { UsersService } from './users/users.service';
@@ -24,7 +24,7 @@ export class HomeController {
   /** One call for the whole Home screen. Money is in paise, like every other endpoint. */
   @Get('home')
   async home(@UserId() userId: string) {
-    const [user, address, wallet, unread, services, active, rep, shopBanner] = await Promise.all([
+    const [user, address, wallet, unread, services, active, rep, content, branding] = await Promise.all([
       this.users.dto(userId),
       this.users.defaultAddress(userId),
       this.ledger.walletBalance(userId),
@@ -32,7 +32,8 @@ export class HomeController {
       this.prisma.service.findMany({ where: { live: true }, orderBy: { sort: 'asc' } }),
       this.activity.live(userId),
       this.income.repurchase(userId),
-      this.settings.get('shopBanner'),
+      this.settings.get('appContent'),
+      this.settings.get('branding'),
     ]);
     const tiles = services.filter((s) => s.group === 'home');
     return {
@@ -41,7 +42,13 @@ export class HomeController {
       walletBalance: wallet.total,
       unreadNotifications: unread,
       services: tiles.map((s) => ({ code: s.code, label: s.label, photo: s.photo })),
-      shopBanner,
+      content: { ...content, slides: content.slides.filter((s) => s.active) },
+      branding,
+      // apps installed before the slider read this single banner
+      shopBanner: (() => {
+        const s = content.slides.find((x) => x.active && x.type === 'image') ?? content.slides.find((x) => x.active);
+        return s ? { chip: s.chip, title: s.title, subtitle: s.subtitle, photo: (s.type === 'video' ? s.poster : s.media) || DEFAULTS.shopBanner.photo } : DEFAULTS.shopBanner;
+      })(),
       liveBooking: active
         ? { kind: active.kind, id: active.id, title: active.title, vendor: active.subtitle, label: active.label, rating: 0, etaMin: 0, photo: active.photo ?? '', step: active.step }
         : null,

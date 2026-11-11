@@ -8,6 +8,7 @@ import { FoodService } from '../food/food.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { ShopService } from '../shop/shop.service';
 import { AdminService, hashPassword } from './admin.service';
+import { ContentService } from './content.service';
 import { DEFAULTS, SettingsService, type SettingKey } from './settings.service';
 
 export type QueueKind = 'order' | 'booking' | 'ride' | 'food' | 'sos';
@@ -35,6 +36,7 @@ export class AdminOpsService {
     private notifications: NotificationsService,
     private food: FoodService,
     private shop: ShopService,
+    private content: ContentService,
   ) {}
 
   /* ---------------- orders & bookings: one queue across verticals ---------------- */
@@ -304,6 +306,8 @@ export class AdminOpsService {
 
   async saveSetting(adminId: string, key: string, value: unknown) {
     if (!(key in DEFAULTS)) throw invalid('KEY', 'Unknown setting', 'key');
+    if (key === 'appContent') this.content.validateAppContent(value);
+    if (key === 'branding') this.content.validateBranding(value);
     if (key === 'commission') {
       const bad = Object.values(value as Record<string, number>).some((n) => typeof n !== 'number' || n < 0 || n > 50);
       if (bad) throw invalid('COMMISSION', 'Each rate must be 0–50%', 'value');
