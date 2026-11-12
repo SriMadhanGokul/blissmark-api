@@ -356,13 +356,19 @@ export class AdminOpsService {
   /* ---------------- support tickets ---------------- */
 
   tickets() {
-    return this.prisma.supportTicket.findMany({ include: { vendor: { select: { name: true, businessName: true, category: true, userId: true } } }, orderBy: { createdAt: 'desc' }, take: 100 });
+    return this.prisma.supportTicket.findMany({
+      include: { vendor: { select: { name: true, businessName: true, category: true, userId: true } }, user: { select: { name: true, phone: true } } },
+      orderBy: { createdAt: 'desc' },
+      take: 100,
+    });
   }
 
   async replyTicket(adminId: string, id: string, reply: string, close: boolean) {
     if (!reply?.trim()) throw invalid('REPLY', 'Write a reply', 'reply');
     const t = await this.prisma.supportTicket.update({ where: { id }, data: { reply: reply.trim(), repliedAt: new Date(), status: close ? 'closed' : 'open' }, include: { vendor: true } });
-    if (t.vendor.userId) await this.notifications.notify(t.vendor.userId, 'partner', 'Support replied', reply.trim().slice(0, 120), '/support');
+    // a partner hears back in the vendor app, a member in the customer app
+    if (t.vendor?.userId) await this.notifications.notify(t.vendor.userId, 'partner', 'Support replied', reply.trim().slice(0, 120), '/support');
+    else if (t.userId) await this.notifications.notify(t.userId, 'account', 'Support replied', reply.trim().slice(0, 120), '/support');
     await this.admin.audit(adminId, 'ticket.reply', `ticket:${id}`, { close });
     return this.tickets();
   }

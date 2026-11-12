@@ -62,12 +62,21 @@ export class HomeController {
   @Get('search')
   async search(@Query('q') q = '') {
     const term = q.trim();
-    if (term.length < 2) return { products: [], services: [] };
-    const [products, services] = await Promise.all([
-      this.prisma.product.findMany({ where: { OR: [{ title: { contains: term, mode: 'insensitive' } }, { brand: { contains: term, mode: 'insensitive' } }] }, take: 12 }),
+    if (term.length < 2) return { products: [], services: [], dishes: [] };
+    const [products, services, dishes] = await Promise.all([
+      this.prisma.product.findMany({ where: { active: true, OR: [{ title: { contains: term, mode: 'insensitive' } }, { brand: { contains: term, mode: 'insensitive' } }] }, include: { seller: { select: { id: true, name: true, rating: true } } }, take: 12 }),
       this.prisma.service.findMany({ where: { live: true, OR: [{ label: { contains: term, mode: 'insensitive' } }, { issues: { has: term } }] } }),
+      this.prisma.menuItem.findMany({
+        where: { available: true, OR: [{ name: { contains: term, mode: 'insensitive' } }, { restaurant: { name: { contains: term, mode: 'insensitive' } } }] },
+        include: { restaurant: { select: { id: true, name: true } } },
+        take: 12,
+      }),
     ]);
-    return { products, services };
+    return {
+      products,
+      services,
+      dishes: dishes.map((d) => ({ id: d.id, name: d.name, price: d.price, photo: d.photo, veg: d.veg, restaurantId: d.restaurant.id, restaurantName: d.restaurant.name })),
+    };
   }
 
   @Public() @Get('health')

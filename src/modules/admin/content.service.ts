@@ -117,7 +117,8 @@ export class ContentService {
     if (!svc) throw notFound('Service');
     if (svc.group !== 'home') throw invalid('CORE', 'Cabs, food, property and SOS are built-in. Turn them off instead of deleting.');
     if (await this.prisma.booking.count({ where: { serviceCode: code } })) throw invalid('IN_USE', 'Customers have booked this service, so it cannot be deleted. Turn it off instead.');
-    await this.prisma.vendor.updateMany({ where: { services: { has: code } }, data: { services: { set: [] } } }).catch(() => {});
+    const vendors = await this.prisma.vendor.findMany({ where: { services: { has: code } }, select: { id: true, services: true } });
+    await Promise.all(vendors.map((v) => this.prisma.vendor.update({ where: { id: v.id }, data: { services: v.services.filter((s) => s !== code) } })));
     await this.prisma.service.delete({ where: { code } });
     await this.admin.audit(adminId, 'service.delete', `service:${code}`, { label: svc.label });
   }

@@ -32,13 +32,14 @@ import { PartnerController } from './modules/partner/partner.controller';
 import { PartnerService } from './modules/partner/partner.service';
 import { ShopController } from './modules/shop/shop.controller';
 import { ShopService } from './modules/shop/shop.service';
+import { SupportController } from './modules/support.controller';
 import { UsersService } from './modules/users/users.service';
 import { LedgerService } from './modules/wallet/ledger.service';
 import { WalletService } from './modules/wallet/wallet.service';
 
 @Module({
   imports: [JwtModule.register({ global: true, secret: process.env.JWT_SECRET })],
-  controllers: [AuthController, HomeController, ShopController, BookingsController, MoneyController, MoreController, PartnerController, AdminController, MediaController],
+  controllers: [AuthController, HomeController, ShopController, BookingsController, MoneyController, MoreController, PartnerController, AdminController, MediaController, SupportController],
   providers: [
     PrismaService,
     LedgerService,

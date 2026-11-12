@@ -74,6 +74,10 @@ class CouponDto {
 class SettingDto {
   @Allow() value!: unknown;
 }
+class AppearanceDto {
+  @Allow() content!: unknown;
+  @Allow() branding!: unknown;
+}
 class StaffDto {
   @IsString() email!: string;
   @IsString() name!: string;
@@ -346,6 +350,18 @@ export class AdminController {
   @AdminOnly('catalog') @Delete('media/:id') async deleteMedia(@AdminId() a: string, @Param('id') id: string) {
     await this.admin.audit(a, 'media.delete', `media:${id}`);
     return this.media.remove(id);
+  }
+  /** Home screen, logo and offers. Catalog staff can publish these; the first image offer also updates older apps. */
+  @AdminOnly('catalog') @Patch('catalog/appearance') async appearance(@AdminId() a: string, @Body() b: AppearanceDto) {
+    this.content.validateAppContent(b.content);
+    this.content.validateBranding(b.branding);
+    await this.ops.saveSetting(a, 'appContent', b.content);
+    await this.ops.saveSetting(a, 'branding', b.branding);
+    const slides = ((b.content as { slides?: { active?: boolean; type?: string; chip?: string; title?: string; subtitle?: string; media?: string; poster?: string }[] }).slides ?? []);
+    const s = slides.find((x) => x.active !== false && x.type === 'image') ?? slides.find((x) => x.active !== false);
+    const photo = s ? (s.type === 'video' ? s.poster : s.media) : '';
+    if (s && photo) await this.ops.saveSetting(a, 'shopBanner', { chip: s.chip ?? '', title: s.title ?? '', subtitle: s.subtitle ?? '', photo });
+    return { ok: true };
   }
   @AdminOnly('catalog') @Post('catalog/coupons') coupon(@AdminId() a: string, @Body() b: CouponDto) {
     return this.ops.saveCoupon(a, b);

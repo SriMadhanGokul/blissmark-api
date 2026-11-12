@@ -37,6 +37,7 @@ model User {
   foodOrders    FoodOrder[]
   sos           SosRequest[]
   shortlist     Shortlist[]
+  tickets       SupportTicket[]
   enquiries     Enquiry[]
 }
 
@@ -263,10 +264,14 @@ model VendorPayout {
   @@index([vendorId])
 }
 
+/// Help requests. Partners raise them from the vendor app (vendorId); members raise them from the customer app (userId).
 model SupportTicket {
   id        String   @id @default(cuid()) @map("_id")
-  vendorId  String
-  vendor    Vendor   @relation(fields: [vendorId], references: [id])
+  vendorId  String?
+  vendor    Vendor?  @relation(fields: [vendorId], references: [id])
+  userId    String?
+  user      User?    @relation(fields: [userId], references: [id])
+  topic     String?
   subject   String
   message   String
   status    String   @default("open")
@@ -275,6 +280,7 @@ model SupportTicket {
   createdAt DateTime @default(now())
 
   @@index([vendorId])
+  @@index([userId])
 }
 
 /// One document per service booking. Status follows the state machine in docs 11.1.
